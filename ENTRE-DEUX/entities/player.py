@@ -34,10 +34,10 @@ class Player:
         # Déplacement horizontal
         if keys[K_d]:
             self.vx = self.speed
-            self.direction = 1
+            self.direction = -1
         elif keys[K_q]:
             self.vx = -self.speed
-            self.direction = -1
+            self.direction = 1
         else:
             self.vx = 0
 
