@@ -25,3 +25,7 @@ ATTACK_DURATION = 0.2
 
 # Sol (temporaire, sera remplacé par les collisions de tilemap)
 GROUND_Y = 590
+
+# cd
+wx = 0
+wy = 0

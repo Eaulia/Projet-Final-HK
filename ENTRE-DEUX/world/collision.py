@@ -13,3 +13,7 @@ def check_platform_collisions(player, platforms):
     """Vérifie les collisions avec les plateformes."""
     for platform in platforms:
         platform.verifier_collision(player)
+
+def check_wall_collisions(player, walls):
+    for wall in walls:
+        wall.verifier_collision(player)

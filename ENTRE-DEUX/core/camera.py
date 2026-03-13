@@ -7,7 +7,7 @@ from settings import WIDTH, HEIGHT
 
 class Camera:
     def __init__(self, scene_width, scene_height):
-        self.offset_x = 0
+        self.offset_x = 1500
         self.offset_y = 0
         self.scene_width = scene_width
         self.scene_height = scene_height
