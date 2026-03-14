@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────
 #  ENTRE-DEUX — Constantes globales
 # ─────────────────────────────────────────
-
+import pygame
 # Résolution
 SCENE_WIDTH  = 2400   # largeur d'une scène (3x l'écran)
 SCENE_HEIGHT = 1280   # hauteur d'une scène (2x l'écran)
@@ -29,3 +29,31 @@ GROUND_Y = 590
 # cd
 wx = 0
 wy = 0
+
+# joy
+manette = None
+axis_y = 0
+axis_x = 0
+DEAD_ZONE = 0.15
+
+# MANETTE PS5 — mapping pygame
+# Axes
+AXIS_GAUCHE_X  = 0   # joystick gauche horizontal
+AXIS_GAUCHE_Y  = 1   # joystick gauche vertical
+AXIS_DROITE_X  = 2
+AXIS_DROITE_Y  = 3
+AXIS_L2        = 4   # -1.0 à 1.0
+AXIS_R2        = 5
+
+# Boutons
+BTN_CROIX      = 0
+BTN_ROND       = 1
+BTN_CARRE      = 2
+BTN_TRIANGLE   = 3
+BTN_L1         = 4
+BTN_R1         = 5
+BTN_L2         = 6
+BTN_R2         = 7
+BTN_OPTIONS    = 9
+BTN_L3         = 11  # appui joystick gauche
+BTN_R3         = 12

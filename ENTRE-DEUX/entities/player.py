@@ -31,43 +31,57 @@ class Player:
         )
 
     def mouvement(self, dt, keys):
-        # Déplacement horizontal
+        self.vx = 0  # reset unique au début
+
+        # Manette — joystick gauche (axe 0)
+        if abs(settings.axis_x) > DEAD_ZONE:
+            self.vx = settings.axis_x * self.speed
+            self.direction = -1 if settings.axis_x > 0 else 1
+
+        # Clavier — écrase la manette si une touche est pressée
         if keys[K_d]:
             self.vx = self.speed
-            self.direction = -1
+            self.direction = 1   # ← corrigé
         elif keys[K_q]:
             self.vx = -self.speed
-            self.direction = 1
-        else:
-            self.vx = 0
+            self.direction = -1  # ← corrigé
 
         # Gravité
         self.vy += self.gravity * dt
 
-        # Saut
+        # Saut clavier
         if keys[K_SPACE] and self.on_ground:
             self.vy = -self.puissance_saut
             self.on_ground = False
 
-        # Application du mouvement
+        # Saut manette — bouton Croix = bouton 0
+        if settings.manette and settings.manette.get_button(0) and self.on_ground:
+            self.vy = -self.puissance_saut
+            self.on_ground = False
+
+        # Mouvement
         self.rect.x += self.vx * dt
         self.rect.y += self.vy * dt
 
-        # Sol temporaire (sera remplacé par tilemap)
+        # Sol temporaire
         if self.rect.bottom > GROUND_Y:
             self.rect.bottom = GROUND_Y
             self.vy = 0
             self.on_ground = True
 
-        # Attaque
+        # Attaque clavier
         if keys[K_f] and not self.attacking:
+            self.attacking = True
+            self.attack_timer = ATTACK_DURATION
+
+        # Attaque manette — Carré = bouton 2
+        if settings.manette and settings.manette.get_button(2) and not self.attacking:
             self.attacking = True
             self.attack_timer = ATTACK_DURATION
 
         if self.attacking:
             self.attack_timer -= dt
 
-        # Position de la hitbox d'attaque selon la direction
         if self.direction == 1:
             self.attack_rect.topleft = (self.rect.right, self.rect.y + 20)
         else:
