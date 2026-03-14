@@ -9,7 +9,9 @@ class Enemy:
     def __init__(self, x, y):
         self.rect = pygame.Rect(x, y, 60, 60)
         self.vx = 120
+
         self.alive = True
+
 
     def update(self, dt):
         self.rect.x += self.vx * dt

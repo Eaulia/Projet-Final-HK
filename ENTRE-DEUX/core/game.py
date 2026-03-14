@@ -10,9 +10,9 @@ from settings import *
 from core.camera import Camera
 from entities.player import Player
 from entities.enemy import Enemy
-from world.tilemap import Platform
+from world.tilemap import Platform, Wall
+from systems.lighting import LightingSystem
 from utils import draw_mouse_coords
-from world.tilemap import Platform, Wall  # ← ajouter Wall à l'import
 from world.collision import check_attack_collisions, check_platform_collisions
 
 class Game:
@@ -22,39 +22,41 @@ class Game:
         pygame.display.set_caption(TITLE)
         self.running = True
         self.clock = pygame.time.Clock()
+
         self.walls = [
-            # Sol
-            Wall(0,590, SCENE_WIDTH, 1000, visible=True),
-            # Plafond
-            Wall(0, -20, SCENE_WIDTH, 20, visible=True),
-            # Mur gauche
-            Wall(0,0, 20, SCENE_HEIGHT, visible=True),
-            # Mur droit
-            Wall(SCENE_WIDTH-20,0, 20, SCENE_HEIGHT, visible=True),
+            Wall(0, 590, SCENE_WIDTH, 1000, visible=True),   # Sol
+            Wall(0, -20, SCENE_WIDTH, 20, visible=True),     # Plafond
+            Wall(0, 0, 20, SCENE_HEIGHT, visible=True),      # Mur gauche
+            Wall(SCENE_WIDTH-20, 0, 20, SCENE_HEIGHT, visible=True),  # Mur droit
         ]
 
-        self.player = Player((40, 0))
+        self.player = Player((100, 400))
         self.camera = Camera(SCENE_WIDTH, SCENE_HEIGHT)
+
         self.enemies = [Enemy(500, 530 - 60)]
+
         self.platforms = [
             Platform(200, 500, 100, 20, BLANC),
             Platform(300, 400, 100, 20, GRIS),
             Platform(400, 300, 100, 20, BLEU),
         ]
-        self.editor = Editor(self.platforms,self.enemies, self.camera)
-        
-        
 
-        
-   
+        self.lighting = LightingSystem()
+        self.lighting.add_light(300, 480, radius=150, type="torch")
+        self.lighting.add_light(600, 380, radius=200, type="torch")
+
+        # Editor en dernier — après lighting !
+        self.editor = Editor(self.platforms, self.enemies, self.camera, self.lighting)
+
     def run(self):
         while self.running:
             dt = self.clock.tick(FPS) / 1000
 
-            # Événements
+            # ── Événements ──────────────────────────────
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
+
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_e:
                         self.editor.toggle()
@@ -64,59 +66,56 @@ class Game:
                         self.editor.load()
                     if event.key == pygame.K_m and self.editor.active:
                         self.editor.change()
+                    if event.key == pygame.K_i and self.editor.active:
+                        self.editor.toggle_light()
 
                 if self.editor.active:
                     if event.type == pygame.MOUSEBUTTONDOWN:
-                        if mod == 0:
-                            if event.button == 1:  # clic gauche → placer
+                        if self.editor.light_mode:
+                            if event.button == 1:
+                                self.editor.handle_light_click(event.pos)
+                            if event.button == 3:
+                                self.editor.delete_light(event.pos)
+                        elif settings.mod == 0:
+                            if event.button == 1:
                                 self.editor.handle_click(event.pos)
-                            if event.button == 3:  # clic droit → supprimer
+                            if event.button == 3:
                                 self.editor.delete_platform(event.pos)
                         else:
-                            if event.button == 1:  # clic gauche → placer
+                            if event.button == 1:
                                 self.editor.handle_click(event.pos)
-                            if event.button == 3:  # clic droit → supprimer
+                            if event.button == 3:
                                 self.editor.delete_mob(event.pos)
 
+                # Clic molette → affiche coords monde
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if event.button == 2:
+                        print(f"Monde x:{settings.wx} y:{settings.wy}")
 
-            # Mise à jour
+            # ── Mise à jour ──────────────────────────────
             keys = pygame.key.get_pressed()
-            man_on ()
-            """
-            if settings.manette:
-                for i in range(settings.manette.get_numaxes()):
-                    val = settings.manette.get_axis(i)
-                    if abs(val) > 0.1:
-                        print(f"Axe {i} = {val:.2f}")
-                for i in range(settings.manette.get_numbuttons()):
-                    if settings.manette.get_button(i):
-                        print(f"Bouton {i} pressé")
-            """
-            x_y_man ()
+            man_on()
+            x_y_man()
+
             self.player.mouvement(dt, keys)
             self.camera.update(self.player.rect)
-            clic_gauche, clic_molette, clic_droit = pygame.mouse.get_pressed()
-            if clic_molette:
-                if event.type == pygame.MOUSEBUTTONDOWN:
-                    if event.button == 2:  # 2 = clic molette
-                        wx = settings.wx
-                        wy = settings.wy
-                        print(wx,wy)
-
-
 
             for enemy in self.enemies:
                 enemy.update(dt)
 
             check_attack_collisions(self.player, self.enemies)
             check_platform_collisions(self.player, self.platforms)
-            
 
-            # Affichage
+            for wall in self.walls:
+                wall.verifier_collision(self.player)
+
+            self.lighting.update()
+
+            # ── Affichage ────────────────────────────────
             self.screen.fill(VIOLET)
+
             for wall in self.walls:
                 if self.camera.is_visible(wall.rect):
-                    wall.verifier_collision(self.player)
                     wall.draw(self.screen, self.camera)
 
             for platform in self.platforms:
@@ -128,11 +127,17 @@ class Game:
                     enemy.draw(self.screen, self.camera)
 
             self.player.draw(self.screen, self.camera)
-            
 
+            # Lumières — avant HUD
+            self.lighting.render(self.screen, self.camera, self.player.rect)
+
+            # HUD et debug — après lumières pour rester lisible
             draw_mouse_coords(self.screen, self.camera)
+
             if self.editor.active:
-                if settings.mod == 0:
+                if self.editor.light_mode:
+                    self.editor.draw_light_preview(self.screen, pygame.mouse.get_pos())
+                elif settings.mod == 0:
                     self.editor.draw_preview(self.screen, pygame.mouse.get_pos())
 
             pygame.display.flip()
