@@ -57,3 +57,5 @@ BTN_R2         = 7
 BTN_OPTIONS    = 9
 BTN_L3         = 11  # appui joystick gauche
 BTN_R3         = 12
+
+mod = 0

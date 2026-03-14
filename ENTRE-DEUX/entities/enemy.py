@@ -15,7 +15,7 @@ class Enemy:
         self.rect.x += self.vx * dt
 
         # Change de direction s'il touche un bord
-        if self.rect.left < 0 or self.rect.right > WIDTH:
+        if self.rect.left < 0 or self.rect.right > SCENE_WIDTH-20:
             self.vx *= -1
 
     def draw(self, surf, camera):

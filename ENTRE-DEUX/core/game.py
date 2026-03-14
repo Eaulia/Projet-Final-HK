@@ -41,7 +41,7 @@ class Game:
             Platform(300, 400, 100, 20, GRIS),
             Platform(400, 300, 100, 20, BLEU),
         ]
-        self.editor = Editor(self.platforms, self.camera)
+        self.editor = Editor(self.platforms,self.enemies, self.camera)
         
         
 
@@ -62,13 +62,22 @@ class Game:
                         self.editor.save()
                     if event.key == pygame.K_l and self.editor.active:
                         self.editor.load()
+                    if event.key == pygame.K_m and self.editor.active:
+                        self.editor.change()
 
                 if self.editor.active:
                     if event.type == pygame.MOUSEBUTTONDOWN:
-                        if event.button == 1:  # clic gauche → placer
-                            self.editor.handle_click(event.pos)
-                        if event.button == 3:  # clic droit → supprimer
-                            self.editor.delete_platform(event.pos)
+                        if mod == 0:
+                            if event.button == 1:  # clic gauche → placer
+                                self.editor.handle_click(event.pos)
+                            if event.button == 3:  # clic droit → supprimer
+                                self.editor.delete_platform(event.pos)
+                        else:
+                            if event.button == 1:  # clic gauche → placer
+                                self.editor.handle_click(event.pos)
+                            if event.button == 3:  # clic droit → supprimer
+                                self.editor.delete_mob(event.pos)
+
 
             # Mise à jour
             keys = pygame.key.get_pressed()
@@ -123,6 +132,7 @@ class Game:
 
             draw_mouse_coords(self.screen, self.camera)
             if self.editor.active:
-                self.editor.draw_preview(self.screen, pygame.mouse.get_pos())
+                if settings.mod == 0:
+                    self.editor.draw_preview(self.screen, pygame.mouse.get_pos())
 
             pygame.display.flip()
