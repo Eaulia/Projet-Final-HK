@@ -3,7 +3,7 @@
 # ─────────────────────────────────────────
 import pygame
 # Résolution
-SCENE_WIDTH  = 2400   # largeur d'une scène (3x l'écran)
+SCENE_WIDTH  = 1000   # largeur d'une scène (3x l'écran)
 SCENE_HEIGHT = 1280   # hauteur d'une scène (2x l'écran)
 WIDTH, HEIGHT = 800, 640
 FPS = 60

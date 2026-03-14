@@ -35,7 +35,7 @@ class Game:
 
         self.player = Player((40, 0))
         self.camera = Camera(SCENE_WIDTH, SCENE_HEIGHT)
-        self.enemies = [Enemy(500, 530 - 60)]
+        self.enemies = [Enemy(500, 530 - 38)]
         self.platforms = [
             Platform(200, 500, 100, 20, BLANC),
             Platform(300, 400, 100, 20, GRIS),
