@@ -22,6 +22,7 @@ class Game:
         pygame.display.set_caption(TITLE)
         self.running = True
         self.clock = pygame.time.Clock()
+        self.fps_font = pygame.font.SysFont("Consolas", 16)
 
         self.walls = [
             Wall(0, 590, SCENE_WIDTH, 1000, visible=True),   # Sol
@@ -53,6 +54,7 @@ class Game:
     def run(self):
         while self.running:
             dt = self.clock.tick(FPS) / 1000
+            
 
             # ── Événements ──────────────────────────────
             for event in pygame.event.get():
@@ -111,7 +113,7 @@ class Game:
             for wall in self.walls:
                 wall.verifier_collision(self.player)
 
-            self.lighting.update()
+            self.lighting.update(dt)
 
             # ── Affichage ────────────────────────────────
             self.screen.fill(VIOLET)
@@ -141,5 +143,7 @@ class Game:
                     self.editor.draw_light_preview(self.screen, pygame.mouse.get_pos())
                 elif settings.mod == 0:
                     self.editor.draw_preview(self.screen, pygame.mouse.get_pos())
+            fps_surf = self.fps_font.render(f"{self.clock.get_fps():.0f} FPS", True, (0, 255, 0))
+            self.screen.blit(fps_surf, (self.screen.get_width() - fps_surf.get_width() - 10, 10))
 
             pygame.display.flip()

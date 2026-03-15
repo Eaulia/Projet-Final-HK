@@ -17,7 +17,7 @@ class Camera:
 
         # Smooth follow
         self.offset_x += (target_rect.centerx - screen_w // 2 - self.offset_x) * 0.1
-        self.offset_y += (target_rect.centery - screen_h // 2 - self.offset_y) * 0.1
+        self.offset_y += (target_rect.centery - screen_h // 2 - self.offset_y) * 0.085
 
         # Clamp aux bords de la scène
         self.offset_x = max(0, min(self.offset_x, self.scene_width - screen_w))

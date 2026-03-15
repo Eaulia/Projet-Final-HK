@@ -89,7 +89,14 @@ class Editor:
             choice = input().strip().lower()
             types = {"p": "player", "t": "torch", "l": "large", "c": "cool", "d": "dim", "b": "background"}
             light_type = types.get(choice, "torch")
-            self.lighting.add_light(cx, cy, radius=radius, type=light_type)
+            print("Flicker ? , T / F" , end="")
+            flicker = input().strip().lower()
+            if flicker == "t":
+                print("Speed ? , 1 ~ 10" , end="")
+                flicker_speed = int(input().strip())
+                self.lighting.add_light(cx, cy, radius=radius, type=light_type, flicker=True, flicker_speed=flicker_speed)
+            else:
+                self.lighting.add_light(cx, cy, radius=radius, type=light_type, flicker=False)
             print(f"✓ Lumière '{light_type}' — ({cx},{cy}) r={radius}")
             self.light_first_point = None
 

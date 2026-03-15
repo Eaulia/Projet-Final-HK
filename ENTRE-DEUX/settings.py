@@ -8,7 +8,7 @@ SCENE_WIDTH  = 2400   # largeur d'une scène (3x l'écran)
 SCENE_HEIGHT = 4000   # hauteur d'une scène (2x l'écran)
 
 WIDTH, HEIGHT = 800, 640
-FPS = 60
+FPS = 80
 TITLE = "ENTRE-DEUX"
 
 # Couleurs
@@ -60,4 +60,10 @@ BTN_OPTIONS    = 9
 BTN_L3         = 11  # appui joystick gauche
 BTN_R3         = 12
 
+
 mod = 0
+
+# lumière
+
+FOND_ALPHA   = 40  # luminosité ambiante (0=noir total, 100=sombre, 255=jour)
+RAYON_JOUEUR = 140  # taille du halo du joueur
