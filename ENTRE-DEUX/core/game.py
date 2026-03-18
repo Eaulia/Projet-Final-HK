@@ -146,8 +146,15 @@ class Game:
         while self.running:
             dt=self.clock.tick(FPS)/1000
 
+<<<<<<< HEAD
             for event in pygame.event.get():
                 if event.type==pygame.QUIT: self.running=False
+=======
+            events = pygame.event.get()
+            for event in events:
+                if event.type == pygame.QUIT:
+                    self.running = False
+>>>>>>> 09ee857c80c2f6be758b182f91793340c5fbe2ee
 
                 if event.type==pygame.KEYDOWN:
                     if event.key==pygame.K_ESCAPE:
@@ -157,8 +164,14 @@ class Game:
                             self.paused=not self.paused; self._pause_selection=0
                         continue
                     if self.paused:
+<<<<<<< HEAD
                         self._handle_pause_key(event.key); continue
                     if event.key==pygame.K_a:
+=======
+                        self._handle_pause_key(event.key)
+                        continue
+                    if event.key == pygame.K_TAB:
+>>>>>>> 09ee857c80c2f6be758b182f91793340c5fbe2ee
                         self.inventory.changer_etat_fenetre()
                     if event.key==pygame.K_e and not(self.editor.active and self.editor._text_mode):
                         self.editor.toggle()
@@ -266,6 +279,8 @@ class Game:
                 ms=self.fps_font.render(self.current_map_name,True,(180,180,180))
                 self.screen.blit(ms,(10,self.screen.get_height()-25))
 
-            self.inventory.draw(self.screen)
+            self.inventory.draw(self.screen, 5, 6)
+            self.inventory.drag_drop(events)
+
             self._draw_fade()
             pygame.display.flip()
