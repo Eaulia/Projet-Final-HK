@@ -78,7 +78,6 @@ class Editor:
         self.ceiling_segments = []
         self.left_segments    = []
         self.right_segments   = []
-
         self.holes = []
 
         self._history     = []
@@ -104,17 +103,18 @@ class Editor:
         self.light_flicker_speed = 5
         self.light_first_point   = None
 
-        self.mob_gravity           = True
-        self.mob_collision         = True
-        self.mob_can_jump          = False
-        self.mob_can_jump_patrol   = False
-        self.mob_detect_range      = 200
-        self.mob_has_light         = False
-        self.mob_sprite_index      = 0
-        self.mob_can_fall_in_holes = False
-        self.mob_respawn_timeout   = 10.0
-        self.mob_jump_power        = 400
-        self._enemy_sprites        = []
+        self.mob_gravity             = True
+        self.mob_collision           = True
+        self.mob_can_jump            = False
+        self.mob_can_jump_patrol     = False
+        self.mob_detect_range        = 200
+        self.mob_has_light           = False
+        self.mob_sprite_index        = 0
+        self.mob_can_fall_in_holes   = False
+        self.mob_can_turn_randomly   = False
+        self.mob_respawn_timeout     = 10.0
+        self.mob_jump_power          = 400
+        self._enemy_sprites          = []
         self._refresh_sprites()
 
         self.mob_patrol_mode = False
@@ -159,12 +159,10 @@ class Editor:
         return (self._enemy_sprites[self.mob_sprite_index % len(self._enemy_sprites)]
                 if self._enemy_sprites else "monstre_perdu.png")
 
-    # ── Phases ────────────────────────────────────────────────────────────
     @property
     def has_holes(self):
         return len(self.holes) > 0
 
-    # ── Segments de bordure ───────────────────────────────────────────────
     def build_border_segments(self):
         gy = settings.GROUND_Y
         cy = settings.CEILING_Y
@@ -223,7 +221,6 @@ class Editor:
         self._punch_hole_in_custom_walls(hole_rect)
         self.holes.append(hole_rect)
 
-    # ── Historique Ctrl+Z ─────────────────────────────────────────────────
     def _snapshot(self):
         state = {
             "ground_y":    settings.GROUND_Y,
@@ -259,13 +256,11 @@ class Editor:
         self._hud_msg       = msg
         self._hud_msg_timer = duration
 
-    # ── Point de restauration ─────────────────────────────────────────────
     def _list_restore_points(self):
         if not os.path.isdir(RESTORE_DIR): return []
         return sorted(f[:-5] for f in os.listdir(RESTORE_DIR) if f.endswith(".json"))
 
     def _save_restore_point(self):
-        """Sauvegarde l'état courant comme point de restauration."""
         ts   = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         name = f"restore_{ts}"
         fp   = os.path.join(RESTORE_DIR, f"{name}.json")
@@ -273,17 +268,17 @@ class Editor:
         return name
 
     def _load_restore_point(self, name):
-        """Charge un point de restauration depuis _restore/."""
         fp = os.path.join(RESTORE_DIR, f"{name}.json")
         try:
             with open(fp) as f: data = json.load(f)
             self._snapshot()
             self._apply_state(data)
+            if not self.ground_segments:
+                self.build_border_segments()
             self._show_msg(f"Restauré : {name}")
         except FileNotFoundError:
             self._show_msg(f"Fichier introuvable : {name}")
 
-    # ── Toggle / Mode ─────────────────────────────────────────────────────
     def toggle(self):
         self.active            = not self.active
         self.first_point       = None
@@ -304,36 +299,29 @@ class Editor:
         self._copy_rect        = None
         if self.mode in (1,6): self._refresh_sprites()
 
-    # ── Touches ───────────────────────────────────────────────────────────
     def handle_key(self, key):
         if self._text_mode is not None:
             return self._handle_text(key)
 
         mods = pygame.key.get_mods()
 
-        # Ctrl+Z — annuler
         if key == pygame.K_z and (mods & pygame.KMOD_CTRL):
             self._undo(); return "undo"
 
-        # Ctrl+R — charger le dernier point de restauration (avec confirmation)
         if key == pygame.K_r and (mods & pygame.KMOD_CTRL):
             restores = self._list_restore_points()
             if not restores:
                 self._show_msg("Aucun point de restauration — utilisez [S] pour sauvegarder d'abord")
             elif self._restore_confirm:
-                # Deuxième Ctrl+R : charge le plus récent
                 self._load_restore_point(restores[-1])
                 self._restore_confirm       = False
                 self._restore_confirm_timer = 0.0
             else:
-                # Premier Ctrl+R : demande confirmation
                 self._restore_confirm       = True
                 self._restore_confirm_timer = 5.0
-                self._show_msg(
-                    f"Ctrl+R encore pour charger : {restores[-1]}  (5s)", 5.0)
+                self._show_msg(f"Ctrl+R encore pour charger : {restores[-1]}  (5s)", 5.0)
             return None
 
-        # R seul — respawn joueur
         if key == pygame.K_r and not (mods & pygame.KMOD_CTRL):
             self.player.respawn(); return None
 
@@ -353,12 +341,10 @@ class Editor:
             self.player.spawn_x=self.player.spawn_y=100
             self.player.respawn()
 
-        # ── Structure (Phase 1 seulement) ─────────────────────────────────
         elif key in (pygame.K_UP, pygame.K_DOWN, pygame.K_HOME, pygame.K_END,
                      pygame.K_LEFT, pygame.K_RIGHT):
             if self.has_holes:
-                self._show_msg(
-                    "Phase 2 active — structure verrouillée  |  [Ctrl+R]=restaurer  [N]=nouvelle map")
+                self._show_msg("Phase 2 active — structure verrouillée  |  [Ctrl+R]=restaurer  [N]=nouvelle map")
                 return None
             self._snapshot()
             if   key == pygame.K_UP:   settings.GROUND_Y  = max(100,  settings.GROUND_Y-20)
@@ -374,7 +360,6 @@ class Editor:
             self.build_border_segments()
             return "structure"
 
-        # PageUp/PageDown — priorité : ennemi sélectionné > mode mob > caméra
         elif key == pygame.K_PAGEUP:
             if self.mode == 1 and self.mob_detect_mode and self._detect_target:
                 self._detect_target.jump_power = min(800, self._detect_target.jump_power + 50)
@@ -394,19 +379,18 @@ class Editor:
             else:
                 self.camera.y_offset = min(400, self.camera.y_offset+20)
 
-        # Lumière
         elif key==pygame.K_t and self.mode==2:
             self.light_type_index=(self.light_type_index+1)%len(LIGHT_TYPES)
         elif key==pygame.K_f and self.mode==2:
             self.light_flicker=not self.light_flicker
 
-        # Mob
         elif key==pygame.K_g and self.mode==1: self.mob_gravity=not self.mob_gravity
         elif key==pygame.K_c and self.mode==1: self.mob_collision=not self.mob_collision
         elif key==pygame.K_j and self.mode==1: self.mob_can_jump=not self.mob_can_jump
         elif key==pygame.K_v and self.mode==1: self.mob_can_jump_patrol=not self.mob_can_jump_patrol
         elif key==pygame.K_i and self.mode==1: self.mob_has_light=not self.mob_has_light
         elif key==pygame.K_o and self.mode==1: self.mob_can_fall_in_holes=not self.mob_can_fall_in_holes
+        elif key==pygame.K_u and self.mode==1: self.mob_can_turn_randomly=not self.mob_can_turn_randomly
         elif key==pygame.K_t and self.mode==1:
             self.mob_sprite_index=(self.mob_sprite_index+1)%max(1,len(self._enemy_sprites))
         elif key==pygame.K_KP_MULTIPLY and self.mode==1:
@@ -428,12 +412,10 @@ class Editor:
             self.mob_detect_mode=not self.mob_detect_mode
             self.mob_patrol_mode=False; self._detect_target=None
 
-        # Hitbox
         elif key==pygame.K_t and self.mode==6:
             self._hb_sprite_index=(self._hb_sprite_index+1)%max(1,len(self._enemy_sprites))
             self._hb_first_point=None
 
-        # Copy/Paste
         elif key==pygame.K_c and self.mode==8: self._do_copy()
         elif key==pygame.K_v and self.mode==8:
             if self._has_clipboard:
@@ -442,7 +424,6 @@ class Editor:
 
         return None
 
-    # ── Nouvelle map ──────────────────────────────────────────────────────
     def _new_map(self, bg_color=None):
         self._snapshot()
         self.platforms.clear(); self.enemies.clear()
@@ -458,7 +439,6 @@ class Editor:
         self.build_border_segments()
         self._show_msg("Nouvelle map — Phase 1 : règle la taille avec ↑↓←→")
 
-    # ── Saisie texte ──────────────────────────────────────────────────────
     def _ask_text(self, mode, prompt):
         self._text_mode=mode; self._text_input=""; self._text_prompt=prompt
 
@@ -502,7 +482,6 @@ class Editor:
         if self.mode==2:
             self.light_flicker_speed=max(1,min(15,self.light_flicker_speed+direction))
 
-    # ── Clics ─────────────────────────────────────────────────────────────
     def handle_click(self, mouse_pos):
         if self._text_mode: return
         wx=int(mouse_pos[0]+self.camera.offset_x)
@@ -536,7 +515,6 @@ class Editor:
                 maps=self._list_maps()
                 self._ask_text("portal_name","Map cible :"+(f"  ({', '.join(maps)})" if maps else ""))
             elif kind=="hole":
-                # Avant le premier trou : sauvegarde automatique d'un point de restauration
                 if not self.has_holes:
                     name = self._save_restore_point()
                     self._show_msg(f"Point de restauration créé : {name}  |  Phase 2 active")
@@ -559,6 +537,7 @@ class Editor:
             can_jump_patrol=self.mob_can_jump_patrol, detect_range=self.mob_detect_range,
             has_light=self.mob_has_light, patrol_left=wx-300, patrol_right=wx+300,
             can_fall_in_holes=self.mob_can_fall_in_holes,
+            can_turn_randomly=self.mob_can_turn_randomly,
             respawn_timeout=self.mob_respawn_timeout,
             jump_power=self.mob_jump_power))
 
@@ -655,7 +634,6 @@ class Editor:
         elif self.mode==5: self.custom_walls[:]=[w for w in self.custom_walls if not w.rect.colliderect(pt)]
         elif self.mode==8: self._copy_rect=None; self._has_clipboard=False; self.first_point=None
 
-    # ── Preview ───────────────────────────────────────────────────────────
     def draw_preview(self, surf, mouse_pos):
         if self.mode in(0,4,5,7,8):
             colors={0:(100,200,255),4:(0,120,255),5:(180,180,180),7:(255,80,80),8:(255,200,0)}
@@ -748,7 +726,6 @@ class Editor:
         surf.blit(font.render("SPAWN",True,(0,150,255)),(sx-font.size("SPAWN")[0]//2,sy-22))
         for portal in self.portals: portal.draw(surf,self.camera,font)
 
-    # ── HUD ───────────────────────────────────────────────────────────────
     def draw_hud(self, surf, dt=0.016):
         font=self._get_font(); small=self._font_small; w=surf.get_width(); sh=surf.get_height()
 
@@ -778,19 +755,21 @@ class Editor:
         if self.mode==0:
             surf.blit(font.render("Clic G x2=rect | Clic D=suppr | [Ctrl+Z]=annuler",True,(200,200,255)),(10,y2))
         elif self.mode==1:
-            gc =(0,255,0) if self.mob_gravity          else (255,80,80)
-            cc =(0,255,0) if self.mob_collision         else (255,80,80)
-            jc =(0,255,0) if self.mob_can_jump          else (255,80,80)
-            vpc=(0,255,0) if self.mob_can_jump_patrol   else (255,80,80)
-            lc =(0,255,0) if self.mob_has_light         else (255,80,80)
-            oc =(0,255,0) if self.mob_can_fall_in_holes else (255,80,80)
+            gc =(0,255,0) if self.mob_gravity            else (255,80,80)
+            cc =(0,255,0) if self.mob_collision           else (255,80,80)
+            jc =(0,255,0) if self.mob_can_jump            else (255,80,80)
+            vpc=(0,255,0) if self.mob_can_jump_patrol     else (255,80,80)
+            lc =(0,255,0) if self.mob_has_light           else (255,80,80)
+            oc =(0,255,0) if self.mob_can_fall_in_holes   else (255,80,80)
+            uc =(0,255,0) if self.mob_can_turn_randomly   else (255,80,80)
             rt =f"{self.mob_respawn_timeout:.0f}s" if self.mob_respawn_timeout>0 else "OFF"
             surf.blit(font.render(f"[G]:{self.mob_gravity}",              True,gc), (10,y2))
             surf.blit(font.render(f"[C]:{self.mob_collision}",            True,cc), (120,y2))
             surf.blit(font.render(f"[J]:{self.mob_can_jump}",             True,jc), (240,y2))
             surf.blit(font.render(f"[V]patr:{self.mob_can_jump_patrol}",  True,vpc),(360,y2))
             surf.blit(font.render(f"[I]:{self.mob_has_light}",            True,lc), (530,y2))
-            surf.blit(font.render(f"[O]Trou:{self.mob_can_fall_in_holes}",True,oc), (650,y2))
+            surf.blit(font.render(f"[O]Trou:{self.mob_can_fall_in_holes}",True,oc), (640,y2))
+            surf.blit(font.render(f"[U]Rand:{self.mob_can_turn_randomly}",True,uc), (810,y2))
             surf.blit(small.render(
                 f"[T]:{self._current_sprite()}  Det:{self.mob_detect_range}  "
                 f"[*/÷]Resp:{rt}  [PgUp/Dn]Jump:{self.mob_jump_power}",
@@ -843,7 +822,6 @@ class Editor:
             "[M]ode [H]itbox [N]ew [S]ave [L]oad [R]espawn [Ctrl+Z]annuler [Ctrl+R]restaurer",
             True,(140,140,140)),(10,70))
 
-        # Message temporaire en bas de l'écran
         if self._hud_msg and self._hud_msg_timer > 0:
             if self._restore_confirm:
                 mc = (255,100,0)
@@ -873,7 +851,6 @@ class Editor:
         surf.blit(font.render(self._text_input+"_",True,(255,255,255)),(bx+15,by+52))
         surf.blit(font.render("[Entrée]=valider  [Échap]=annuler",True,(140,140,140)),(bx+15,by+90))
 
-    # ── Save / Load ───────────────────────────────────────────────────────
     def _save_to(self, fp):
         data = self._build_save_data()
         with open(fp,"w") as f: json.dump(data,f,indent=2)
@@ -934,10 +911,17 @@ class Editor:
             return [Wall(s["x"],s["y"],s["w"],s["h"],visible=True,is_border=is_border)
                     for s in data.get(key,[])]
         if "ground_segments" in data:
-            self.ground_segments  =_segs("ground_segments",  is_border=True)
-            self.ceiling_segments =_segs("ceiling_segments", is_border=True)
-            self.left_segments    =_segs("left_segments",    is_border=True)
-            self.right_segments   =_segs("right_segments",   is_border=True)
+            gs = _segs("ground_segments", is_border=True)
+            cs = _segs("ceiling_segments", is_border=True)
+            ls = _segs("left_segments",    is_border=True)
+            rs = _segs("right_segments",   is_border=True)
+            if gs or cs or ls or rs:
+                self.ground_segments  = gs
+                self.ceiling_segments = cs
+                self.left_segments    = ls
+                self.right_segments   = rs
+            else:
+                self.build_border_segments()
         else:
             self.build_border_segments()
 
@@ -946,16 +930,22 @@ class Editor:
         self.enemies.clear()
         for e in data.get("enemies",[]):
             self.enemies.append(Enemy(e["x"],e["y"],
-                has_gravity=e.get("has_gravity",True),has_collision=e.get("has_collision",True),
+                has_gravity=e.get("has_gravity",True),
+                has_collision=e.get("has_collision",True),
                 sprite_name=e.get("sprite_name","monstre_perdu.png"),
-                can_jump=e.get("can_jump",False),can_jump_patrol=e.get("can_jump_patrol",False),
+                can_jump=e.get("can_jump",False),
+                can_jump_patrol=e.get("can_jump_patrol",False),
                 jump_power=e.get("jump_power",400),
-                detect_range=e.get("detect_range",200),detect_height=e.get("detect_height",80),
-                has_light=e.get("has_light",False),light_type=e.get("light_type","dim"),
+                detect_range=e.get("detect_range",200),
+                detect_height=e.get("detect_height",80),
+                has_light=e.get("has_light",False),
+                light_type=e.get("light_type","dim"),
                 light_radius=e.get("light_radius",100),
-                patrol_left=e.get("patrol_left",-1),patrol_right=e.get("patrol_right",-1),
+                patrol_left=e.get("patrol_left",-1),
+                patrol_right=e.get("patrol_right",-1),
                 can_fall_in_holes=e.get("can_fall_in_holes",False),
-                respawn_timeout=e.get("respawn_timeout",10.0)))
+                respawn_timeout=e.get("respawn_timeout",10.0),
+                can_turn_randomly=e.get("can_turn_randomly",False)))
 
         self.lighting.lights.clear()
         for l in data.get("lights",[]):

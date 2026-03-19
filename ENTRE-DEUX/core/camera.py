@@ -2,36 +2,38 @@
 #  ENTRE-DEUX — Caméra
 # ─────────────────────────────────────────
 import pygame
+import settings
 from settings import WIDTH, HEIGHT
 
 
 class Camera:
     def __init__(self, scene_width, scene_height):
-        self.offset_x    = 0
-        self.offset_y    = 0
+        self.offset_x     = 0
+        self.offset_y     = 0
         self.scene_width  = scene_width
         self.scene_height = scene_height
-        self.y_offset = 150
+        self.y_offset     = 150
+
+        # Cache de la taille écran — évite get_surface() à chaque appel
+        self._sw = WIDTH
+        self._sh = HEIGHT
 
     def update(self, target_rect):
-        screen_w, screen_h = pygame.display.get_surface().get_size()
+        # Mise à jour du cache taille écran une fois par frame
+        surf = pygame.display.get_surface()
+        if surf:
+            self._sw, self._sh = surf.get_size()
 
-        target_x = target_rect.centerx - screen_w // 2
-        target_y = target_rect.centery - screen_h // 2 + self.y_offset
+        target_x = target_rect.centerx - self._sw // 2
+        target_y = target_rect.centery - self._sh // 2 + self.y_offset
 
         self.offset_x += (target_x - self.offset_x) * 0.1
         self.offset_y += (target_y - self.offset_y) * 0.1
 
-        import settings
-        # Borne basse : le sol reste visible
-        max_y = settings.GROUND_Y + 40 - screen_h
+        max_y = settings.GROUND_Y + 40 - self._sh
+        min_y = settings.CEILING_Y - self._sh // 2
 
-        # Borne haute : suit le plafond (CEILING_Y peut être négatif)
-        # On soustrait la moitié de l'écran pour que le joueur soit
-        # centré verticalement quand il touche le plafond.
-        min_y = settings.CEILING_Y - screen_h // 2
-
-        self.offset_x = max(0, min(self.offset_x, self.scene_width - screen_w))
+        self.offset_x = max(0, min(self.offset_x, self.scene_width - self._sw))
         self.offset_y = max(min_y, min(self.offset_y, max(0, max_y)))
 
     def apply(self, rect):
@@ -43,6 +45,8 @@ class Camera:
         )
 
     def is_visible(self, rect):
-        screen_w, screen_h = pygame.display.get_surface().get_size()
-        screen_rect = pygame.Rect(self.offset_x, self.offset_y, screen_w, screen_h)
-        return screen_rect.colliderect(rect)
+        """Test de visibilité sans appel à get_surface()."""
+        return (rect.right  > self.offset_x and
+                rect.left   < self.offset_x + self._sw and
+                rect.bottom > self.offset_y and
+                rect.top    < self.offset_y + self._sh)
