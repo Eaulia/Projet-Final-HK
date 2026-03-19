@@ -14,9 +14,19 @@ _BASE_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENEMIES_DIR = os.path.join(_BASE_DIR, "assets", "images", "enemies")
 os.makedirs(ENEMIES_DIR, exist_ok=True)
 
-# Rayon de filtre spatial pour les collisions (px) — on ignore les walls
-# trop loin pour qu'ils puissent toucher l'ennemi ce frame.
-_CULL_DIST = 300
+_CULL_DIST = 400
+_LOS_SKIP  = 4
+
+# Fonts partagés entre toutes les instances — créés une seule fois
+_font_dbg_small = None
+_font_dbg_tiny  = None
+
+def _get_debug_fonts():
+    global _font_dbg_small, _font_dbg_tiny
+    if _font_dbg_small is None:
+        _font_dbg_small = pygame.font.SysFont("Consolas", 12)
+        _font_dbg_tiny  = pygame.font.SysFont("Consolas", 11)
+    return _font_dbg_small, _font_dbg_tiny
 
 
 def list_enemy_sprites():
@@ -29,14 +39,11 @@ def list_enemy_sprites():
 
 
 def _nearby(walls, rect, margin=_CULL_DIST):
-    """Filtre rapide : retourne seulement les walls proches du rect.
-    Évite les O(n) colliderect sur tous les segments à chaque frame."""
     cx, cy = rect.centerx, rect.centery
     result = []
     for w in walls:
         wr = w.rect if hasattr(w, 'rect') else w
-        if (abs(wr.centerx - cx) < margin and
-                abs(wr.centery - cy) < margin):
+        if abs(wr.centerx - cx) < margin and abs(wr.centery - cy) < margin:
             result.append(w)
     return result
 
@@ -66,8 +73,8 @@ class Enemy:
 
         self.patrol_speed = 120
         self.chase_speed  = 200
-        self.vx           = self.patrol_speed
-        self.vy           = 0
+        self.vx = self.patrol_speed
+        self.vy = 0
         self.direction    = 1
         self.knockback_vx = 0.0
 
@@ -92,6 +99,12 @@ class Enemy:
         self._last_x        = x
         self._stuck_timeout = 0.5
 
+        self._jump_lock     = 0.0
+        self._JUMP_LOCK_DUR = 0.4
+
+        self._los_frame = 0
+        self._los_cache = True
+
         self.has_light    = has_light
         self.light_type   = light_type
         self.light_radius = light_radius
@@ -105,16 +118,14 @@ class Enemy:
         self.last_known_dir  = 1
         self.attack_cooldown = 0.0
 
-    # ──────────────────────────────────────────────────────────────────────
-
     def _teleport_to_spawn(self):
-        self.rect.x       = self.spawn_x
-        self.rect.bottom  = settings.GROUND_Y
+        self.rect.x = self.spawn_x
+        self.rect.bottom = settings.GROUND_Y
         self.vy = 0; self.vx = self.patrol_speed; self.knockback_vx = 0.0
         self.chasing = False; self.returning = False
         self._returning_timer = 0.0; self._hole_cooldown = 0.0
         self._stuck_timer = 0.0; self._last_x = self.spawn_x
-        self.on_ground = True
+        self._jump_lock = 0.0; self.on_ground = True
 
     def _detect_rect(self):
         if self.direction > 0:
@@ -127,96 +138,86 @@ class Enemy:
                                self.detect_range, self.detect_height)
 
     def _chase_rect(self):
-        """Zone de maintien de la chasse — grand carré centré, pour ne pas
-        perdre le joueur qui saute haut."""
         r = self.detect_range * 2
         return pygame.Rect(self.rect.centerx - r, self.rect.centery - r, r*2, r*2)
 
     def _has_line_of_sight(self, player_rect, walls, platforms):
+        self._los_frame += 1
+        if self._los_frame % _LOS_SKIP != 0:
+            return self._los_cache
         ex, ey = self.rect.centerx, self.rect.centery
         px, py = player_rect.centerx, player_rect.centery
-        for i in range(1, 10):
-            t  = i / 10
+        result = True
+        for i in range(1, 8):
+            t  = i / 8
             cx = int(ex + (px - ex) * t)
             cy = int(ey + (py - ey) * t)
             point = pygame.Rect(cx, cy, 2, 2)
-            if walls:
-                for wall in walls:
-                    if getattr(wall, 'is_border', False):
-                        continue
-                    wr = wall.rect if hasattr(wall, 'rect') else wall
-                    if point.colliderect(wr):
-                        return False
+            for wall in walls:
+                if getattr(wall, 'is_border', False): continue
+                wr = wall.rect if hasattr(wall, 'rect') else wall
+                if point.colliderect(wr): result = False; break
+            if not result: break
             if platforms:
                 for p in platforms:
                     pr = p.rect if hasattr(p, 'rect') else p
                     if pr.height > 10 and point.colliderect(pr):
-                        return False
-        return True
+                        result = False; break
+            if not result: break
+        self._los_cache = result
+        return result
 
     def hit_player(self, player_rect):
-        if self.attack_cooldown > 0:
-            return False
-        self.knockback_vx    = -200 if self.rect.centerx < player_rect.centerx else 200
+        if self.attack_cooldown > 0: return False
+        self.knockback_vx = -200 if self.rect.centerx < player_rect.centerx else 200
         self.attack_cooldown = 0.8
         return True
 
     def _is_in_patrol_zone(self):
         return self.patrol_left <= self.rect.centerx <= self.patrol_right
 
-    def _wall_height_at(self, x, walls):
-        """Retourne la hauteur du premier wall dont le bord gauche/droit
-        est à la position x (sonde anticipée de saut)."""
-        probe = pygame.Rect(x, self.rect.y, 4, self.hitbox_h)
-        for w in walls:
-            if getattr(w, 'player_only', False):
-                continue
+    def _probe_wall_ahead(self, total_vx, dt, walls_near):
+        if not self.on_ground: return None
+        lookahead = max(int(abs(total_vx * dt) * 1.5) + 10, 14)
+        probe = pygame.Rect(self.rect.x + lookahead * self.direction,
+                            self.rect.y, 4, self.hitbox_h)
+        for w in walls_near:
+            if getattr(w, 'player_only', False): continue
             wr = w.rect if hasattr(w, 'rect') else w
-            if probe.colliderect(wr):
-                return wr.height
+            if probe.colliderect(wr): return w
         return None
 
-    def _should_jump_ahead(self, total_vx, dt, walls):
-        """Sonde anticipée : regarde quelques pixels devant l'ennemi.
-        Si un wall se trouve là ET qu'on peut sauter par-dessus,
-        retourne True pour déclencher le saut AVANT la collision."""
-        if not self.on_ground or not self.can_jump:
-            return False
-        if not (self.chasing or self.returning or self.can_jump_patrol):
-            return False
-        # Sonde à ~1.5 frame devant
-        lookahead = max(int(abs(total_vx * dt) * 1.5) + 8, 12)
-        probe_x   = self.rect.x + lookahead * self.direction
-        h = self._wall_height_at(probe_x, walls)
-        if h is not None and h <= self.jump_power / 8:
-            return True
-        return False
-
-    # ──────────────────────────────────────────────────────────────────────
+    def _probe_hole_ahead(self, total_vx, dt, holes):
+        if not self.on_ground or not holes: return False
+        step  = max(int(abs(total_vx * dt)) + 12, 20)
+        probe = pygame.Rect(self.rect.x + step * self.direction,
+                            settings.GROUND_Y - 2, self.rect.width, 4)
+        return any(probe.colliderect(h) for h in holes)
 
     def update(self, dt, platforms=None, walls=None, player_rect=None, holes=None):
-        if not self.alive:
-            return
+        if not self.alive: return
 
         if self.attack_cooldown > 0: self.attack_cooldown -= dt
         if self._hole_cooldown  > 0: self._hole_cooldown  = max(0.0, self._hole_cooldown - dt)
+        if self._jump_lock      > 0: self._jump_lock       = max(0.0, self._jump_lock - dt)
 
-        # Filtre spatial — on ne teste que les walls proches
         walls_near = _nearby(walls, self.rect) if walls else []
 
         # ── Détection ────────────────────────────────────────────────────
         if player_rect:
             zone = self._chase_rect() if self.chasing else self._detect_rect()
-            can_see = (zone.colliderect(player_rect) and
-                       self._has_line_of_sight(player_rect, walls_near, platforms))
+            in_zone = zone.colliderect(player_rect)
+            player_in_hole = holes and any(player_rect.colliderect(h) for h in holes)
+            if player_in_hole and not self.can_fall_in_holes:
+                in_zone = False
+            can_see = in_zone and self._has_line_of_sight(player_rect, walls_near, platforms)
             if can_see:
                 self.chasing = True; self.returning = False
                 self._returning_timer = 0.0; self._hole_cooldown = 0.0
                 self._stuck_timer = 0.0; self.memory_timer = self.MEMORY_DURATION
                 self.last_known_dir = -1 if player_rect.centerx < self.rect.centerx else 1
             else:
-                if self.memory_timer > 0:
-                    self.memory_timer -= dt
+                if self.memory_timer > 0: self.memory_timer -= dt
                 elif self.chasing:
                     self.chasing = False; self.returning = True
                     self._returning_timer = 0.0
@@ -251,8 +252,8 @@ class Enemy:
         if abs(self.knockback_vx) > 1: self.knockback_vx *= 0.85
         else: self.knockback_vx = 0
 
-        # ── Anti-blocage dans un coin ────────────────────────────────────
-        if self.on_ground and not self.chasing:
+        # ── Anti-blocage coin ────────────────────────────────────────────
+        if self.on_ground and not self.chasing and self._jump_lock <= 0:
             if abs(self.rect.x - self._last_x) < 2:
                 self._stuck_timer += dt
                 if self._stuck_timer >= self._stuck_timeout:
@@ -262,53 +263,70 @@ class Enemy:
                 self._stuck_timer = 0.0
             self._last_x = self.rect.x
 
-        # ── Sonde anticipée de saut ──────────────────────────────────────
-        # On regarde devant AVANT de bouger — si un obstacle sautable est
-        # imminent, on saute maintenant sans changer de direction.
-        if self._should_jump_ahead(total_vx, dt, walls_near):
-            self.vy = -self.jump_power
-            self.on_ground = False
+        # ── Sonde anticipée ──────────────────────────────────────────────
+        can_jump_now = self.can_jump and self.on_ground
+        will_jump = False
+
+        if can_jump_now and self._jump_lock <= 0:
+            if not self.can_fall_in_holes and self._probe_hole_ahead(total_vx, dt, holes):
+                if self.chasing or self.can_jump_patrol:
+                    self.vy = -self.jump_power; self.on_ground = False
+                    self._jump_lock = self._JUMP_LOCK_DUR
+                    self._hole_cooldown = 0.5; will_jump = True
+                else:
+                    self.direction *= -1
+                    self.rect.x -= int(total_vx * dt) * 4
+                    self._hole_cooldown = 0.5
+
+            if not will_jump and (self.chasing or self.returning or self.can_jump_patrol):
+                w_ahead = self._probe_wall_ahead(total_vx, dt, walls_near)
+                if w_ahead is not None:
+                    wr = w_ahead.rect if hasattr(w_ahead, 'rect') else w_ahead
+                    if wr.height <= self.jump_power / 8:
+                        self.vy = -self.jump_power; self.on_ground = False
+                        self._jump_lock = self._JUMP_LOCK_DUR; will_jump = True
 
         # ── Déplacement horizontal ───────────────────────────────────────
         self.rect.x += int(total_vx * dt)
 
-        # Collisions horizontales walls (filtrées)
         for wall in walls_near:
             if getattr(wall, 'player_only', False): continue
             wr = wall.rect if hasattr(wall, 'rect') else wall
             if not self.rect.colliderect(wr): continue
             if total_vx > 0 and self.rect.right > wr.left and self.rect.left < wr.left:
                 self.rect.right = wr.left
-                # Saut si possible (déjà géré par la sonde, mais sécurité)
-                if self.can_jump and self.on_ground and wr.height <= self.jump_power / 8 and \
-                   (self.chasing or self.returning or self.can_jump_patrol):
-                    self.vy = -self.jump_power; self.on_ground = False
-                else:
-                    self.direction *= -1
+                if not will_jump and self._jump_lock <= 0:
+                    if self.can_jump and self.on_ground and wr.height <= self.jump_power / 8 and \
+                       (self.chasing or self.returning or self.can_jump_patrol):
+                        self.vy = -self.jump_power; self.on_ground = False
+                        self._jump_lock = self._JUMP_LOCK_DUR; will_jump = True
+                    else: self.direction *= -1
             elif total_vx < 0 and self.rect.left < wr.right and self.rect.right > wr.right:
                 self.rect.left = wr.right
-                if self.can_jump and self.on_ground and wr.height <= self.jump_power / 8 and \
-                   (self.chasing or self.returning or self.can_jump_patrol):
-                    self.vy = -self.jump_power; self.on_ground = False
-                else:
-                    self.direction *= -1
+                if not will_jump and self._jump_lock <= 0:
+                    if self.can_jump and self.on_ground and wr.height <= self.jump_power / 8 and \
+                       (self.chasing or self.returning or self.can_jump_patrol):
+                        self.vy = -self.jump_power; self.on_ground = False
+                        self._jump_lock = self._JUMP_LOCK_DUR; will_jump = True
+                    else: self.direction *= -1
 
-        # Collisions horizontales plateformes
         if self.has_collision and platforms:
             for p in platforms:
                 plat = p.rect if hasattr(p, 'rect') else p
                 if not self.rect.colliderect(plat): continue
-                can_jump_now = (self.chasing and self.can_jump) or self.can_jump_patrol
+                can_jp = (self.chasing and self.can_jump) or self.can_jump_patrol
                 if total_vx > 0 and self.rect.right > plat.left and self.rect.left < plat.left:
                     self.rect.right = plat.left
-                    if can_jump_now and self.on_ground and plat.height <= self.jump_power / 8:
+                    if can_jp and self.on_ground and plat.height <= self.jump_power / 8 and not will_jump:
                         self.vy = -self.jump_power; self.on_ground = False
-                    else: self.direction *= -1
+                        self._jump_lock = self._JUMP_LOCK_DUR; will_jump = True
+                    elif not will_jump: self.direction *= -1
                 elif total_vx < 0 and self.rect.left < plat.right and self.rect.right > plat.right:
                     self.rect.left = plat.right
-                    if can_jump_now and self.on_ground and plat.height <= self.jump_power / 8:
+                    if can_jp and self.on_ground and plat.height <= self.jump_power / 8 and not will_jump:
                         self.vy = -self.jump_power; self.on_ground = False
-                    else: self.direction *= -1
+                        self._jump_lock = self._JUMP_LOCK_DUR; will_jump = True
+                    elif not will_jump: self.direction *= -1
 
         # ── Gravité ──────────────────────────────────────────────────────
         if self.has_gravity:
@@ -319,30 +337,15 @@ class Enemy:
                 if self.rect.bottom > settings.GROUND_Y:
                     self.rect.bottom = settings.GROUND_Y
                     self.vy = 0; self.on_ground = True
-                else:
-                    self.on_ground = False
-
-                if self.on_ground and holes and self._hole_cooldown <= 0:
-                    step  = max(int(abs(total_vx * dt)) + 12, 20)
-                    probe = pygame.Rect(self.rect.x + step * self.direction,
-                                        settings.GROUND_Y - 2, self.rect.width, 4)
-                    if any(probe.colliderect(h) for h in holes):
-                        if self.can_jump:
-                            self.vy = -self.jump_power; self.on_ground = False
-                            self._hole_cooldown = 0.5
-                        else:
-                            self.direction *= -1
-                            self.rect.x -= int(total_vx * dt) * 4
-                            self._hole_cooldown = 0.5
+                else: self.on_ground = False
             else:
                 in_hole = holes and any(self.rect.colliderect(h) for h in holes)
                 if not in_hole and self.rect.bottom > settings.GROUND_Y:
                     self.rect.bottom = settings.GROUND_Y
                     self.vy = 0; self.on_ground = True
-                elif not in_hole:
-                    self.on_ground = False
+                else:
+                    if not in_hole: self.on_ground = False
 
-        # Collision verticale plateformes
         if self.has_collision and platforms:
             for p in platforms:
                 plat = p.rect if hasattr(p, 'rect') else p
@@ -351,26 +354,22 @@ class Enemy:
                         self.rect.bottom = plat.top
                         self.vy = 0; self.on_ground = True
 
-        # Collision verticale walls (filtrées)
         for wall in walls_near:
             if getattr(wall, 'player_only', False): continue
             wr = wall.rect if hasattr(wall, 'rect') else wall
             if not self.rect.colliderect(wr): continue
-            ot  = self.rect.bottom - wr.top
-            ob  = wr.bottom - self.rect.top
-            ol  = self.rect.right  - wr.left
+            ot = self.rect.bottom - wr.top
+            ob = wr.bottom - self.rect.top
+            ol = self.rect.right  - wr.left
             or_ = wr.right - self.rect.left
-            mn  = min(ot, ob, ol, or_)
+            mn = min(ot, ob, ol, or_)
             if mn == ot and self.vy >= 0:
                 self.rect.bottom = wr.top; self.vy = 0; self.on_ground = True
             elif mn == ob and self.vy < 0:
                 self.rect.top = wr.bottom; self.vy = 0
 
-    # ──────────────────────────────────────────────────────────────────────
-
     def draw(self, surf, camera, show_hitbox=False):
-        if not self.alive:
-            return
+        if not self.alive: return
         img = self.idle_anim.img()
         if self.direction < 0:
             img = pygame.transform.flip(img, True, False)
@@ -384,72 +383,75 @@ class Enemy:
             sy = self.rect.y - self.hitbox_oy
         surf.blit(img, camera.apply(pygame.Rect(sx, sy, self.sprite_w, self.sprite_h)))
 
-        if show_hitbox:
-            pygame.draw.rect(surf, (255,0,0), camera.apply(self.rect), 1)
-            if self.chasing:
-                pygame.draw.rect(surf, (255,80,80), camera.apply(self._chase_rect()), 1)
+        if not show_hitbox:
+            return
+
+        # Fonts cachés — plus de SysFont par frame
+        font_s, font_t = _get_debug_fonts()
+
+        pygame.draw.rect(surf, (255,0,0), camera.apply(self.rect), 1)
+        if self.chasing:
+            pygame.draw.rect(surf, (255,80,80), camera.apply(self._chase_rect()), 1)
+        else:
+            pygame.draw.rect(surf, (255,255,0), camera.apply(self._detect_rect()), 1)
+
+        pl = int(self.patrol_left  - camera.offset_x)
+        pr = int(self.patrol_right - camera.offset_x)
+        py = int(self.rect.bottom  - camera.offset_y) + 5
+        pygame.draw.line(surf, (0,200,0), (pl,py), (pr,py), 2)
+        pygame.draw.line(surf, (0,200,0), (pl,py-4), (pl,py+4), 2)
+        pygame.draw.line(surf, (0,200,0), (pr,py-4), (pr,py+4), 2)
+
+        if self.can_jump and self.jump_power > 0:
+            mjh  = int((self.jump_power**2) / (2*GRAVITY))
+            jtop = int(self.rect.bottom - camera.offset_y) - mjh
+            lx   = self.rect.x     - int(camera.offset_x) - 5
+            rx   = self.rect.right - int(camera.offset_x) + 5
+            mx2  = self.rect.centerx - int(camera.offset_x)
+            fy2  = int(self.rect.bottom - camera.offset_y)
+            pygame.draw.line(surf, (0,220,220), (lx,jtop), (rx,jtop), 1)
+            pygame.draw.line(surf, (0,220,220), (mx2,fy2), (mx2,jtop), 1)
+            surf.blit(font_t.render(f"{mjh}px", True, (0,220,220)),
+                      (rx+3, jtop-5))
+
+        cx = self.rect.centerx - int(camera.offset_x)
+        cy = self.rect.centery - int(camera.offset_y)
+        ex = cx + 25 * self.direction
+        pygame.draw.line(surf, (255,255,0), (cx,cy), (ex,cy), 2)
+        pygame.draw.line(surf, (255,255,0), (ex,cy), (ex-6*self.direction,cy-5), 2)
+        pygame.draw.line(surf, (255,255,0), (ex,cy), (ex-6*self.direction,cy+5), 2)
+
+        if self.chasing:
+            surf.blit(font_s.render("!", True, (255,50,50)), (cx-3, cy-30))
+        elif self.returning:
+            if self.respawn_timeout > 0:
+                rem = max(0.0, self.respawn_timeout - self._returning_timer)
+                surf.blit(font_s.render(f"<< {rem:.0f}s", True, (100,200,100)), (cx-18,cy-28))
             else:
-                pygame.draw.rect(surf, (255,255,0), camera.apply(self._detect_rect()), 1)
+                surf.blit(font_s.render("<<", True, (100,200,100)), (cx-8,cy-28))
 
-            pl = int(self.patrol_left  - camera.offset_x)
-            pr = int(self.patrol_right - camera.offset_x)
-            py = int(self.rect.bottom  - camera.offset_y) + 5
-            pygame.draw.line(surf, (0,200,0), (pl,py), (pr,py), 2)
-            pygame.draw.line(surf, (0,200,0), (pl,py-4), (pl,py+4), 2)
-            pygame.draw.line(surf, (0,200,0), (pr,py-4), (pr,py+4), 2)
+        if self.memory_timer > 0 and not self.chasing:
+            ratio = self.memory_timer / self.MEMORY_DURATION
+            bx = self.rect.x - int(camera.offset_x)
+            by = self.rect.y - int(camera.offset_y) - 8
+            pygame.draw.rect(surf, (255,150,0), (bx, by, int(self.hitbox_w*ratio), 3))
 
-            if self.can_jump and self.jump_power > 0:
-                mjh  = int((self.jump_power**2) / (2*GRAVITY))
-                jtop = int(self.rect.bottom - camera.offset_y) - mjh
-                lx   = self.rect.x     - int(camera.offset_x) - 5
-                rx   = self.rect.right - int(camera.offset_x) + 5
-                mx2  = self.rect.centerx - int(camera.offset_x)
-                fy2  = int(self.rect.bottom - camera.offset_y)
-                pygame.draw.line(surf, (0,220,220), (lx,jtop), (rx,jtop), 1)
-                pygame.draw.line(surf, (0,220,220), (mx2,fy2), (mx2,jtop), 1)
-                font = pygame.font.SysFont("Consolas", 11)
-                surf.blit(font.render(f"{mjh}px", True, (0,220,220)), (rx+3, jtop-5))
+        if self.can_fall_in_holes:
+            fx = self.rect.centerx - int(camera.offset_x)
+            fy = self.rect.bottom  - int(camera.offset_y) + 8
+            pygame.draw.polygon(surf, (0,220,220), [(fx,fy+8),(fx-6,fy),(fx+6,fy)])
 
-            cx = self.rect.centerx - int(camera.offset_x)
-            cy = self.rect.centery - int(camera.offset_y)
-            ex = cx + 25 * self.direction
-            pygame.draw.line(surf, (255,255,0), (cx,cy), (ex,cy), 2)
-            pygame.draw.line(surf, (255,255,0), (ex,cy), (ex-6*self.direction,cy-5), 2)
-            pygame.draw.line(surf, (255,255,0), (ex,cy), (ex-6*self.direction,cy+5), 2)
+        if self._hole_cooldown > 0:
+            ratio = self._hole_cooldown / 0.5
+            bx = self.rect.x - int(camera.offset_x)
+            by = int(self.rect.bottom - camera.offset_y) + 3
+            pygame.draw.rect(surf, (255,120,0), (bx, by, int(self.hitbox_w*ratio), 2))
 
-            if self.chasing:
-                font = pygame.font.SysFont("Consolas", 14)
-                surf.blit(font.render("!", True, (255,50,50)), (cx-3, cy-30))
-            elif self.returning:
-                font = pygame.font.SysFont("Consolas", 12)
-                if self.respawn_timeout > 0:
-                    rem = max(0.0, self.respawn_timeout - self._returning_timer)
-                    surf.blit(font.render(f"<< {rem:.0f}s", True, (100,200,100)), (cx-18,cy-28))
-                else:
-                    surf.blit(font.render("<<", True, (100,200,100)), (cx-8,cy-28))
-
-            if self.memory_timer > 0 and not self.chasing:
-                ratio = self.memory_timer / self.MEMORY_DURATION
-                bx = self.rect.x - int(camera.offset_x)
-                by = self.rect.y - int(camera.offset_y) - 8
-                pygame.draw.rect(surf, (255,150,0), (bx, by, int(self.hitbox_w*ratio), 3))
-
-            if self.can_fall_in_holes:
-                fx = self.rect.centerx - int(camera.offset_x)
-                fy = self.rect.bottom  - int(camera.offset_y) + 8
-                pygame.draw.polygon(surf, (0,220,220), [(fx,fy+8),(fx-6,fy),(fx+6,fy)])
-
-            if self._hole_cooldown > 0:
-                ratio = self._hole_cooldown / 0.5
-                bx = self.rect.x - int(camera.offset_x)
-                by = int(self.rect.bottom - camera.offset_y) + 3
-                pygame.draw.rect(surf, (255,120,0), (bx, by, int(self.hitbox_w*ratio), 2))
-
-            if self._stuck_timer > 0.2:
-                bx = self.rect.x - int(camera.offset_x)
-                by = self.rect.y - int(camera.offset_y) - 12
-                pygame.draw.rect(surf, (255,0,0),
-                    (bx, by, int(self.hitbox_w * self._stuck_timer / self._stuck_timeout), 2))
+        if self._stuck_timer > 0.2:
+            bx = self.rect.x - int(camera.offset_x)
+            by = self.rect.y - int(camera.offset_y) - 12
+            pygame.draw.rect(surf, (255,0,0),
+                (bx, by, int(self.hitbox_w * self._stuck_timer / self._stuck_timeout), 2))
 
     def get_light_pos(self):
         return (self.rect.centerx, self.rect.centery)
@@ -473,6 +475,3 @@ class Enemy:
             "can_fall_in_holes": self.can_fall_in_holes,
             "respawn_timeout":   self.respawn_timeout,
         }
-    
-
-    
