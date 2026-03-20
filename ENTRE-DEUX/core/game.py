@@ -200,7 +200,8 @@ class Game:
         while self.running:
             dt = self.clock.tick(FPS) / 1000
 
-            for event in pygame.event.get():
+            events = pygame.event.get()
+            for event in events:
                 if event.type == pygame.QUIT:
                     self.running = False
 
@@ -214,7 +215,7 @@ class Game:
                         continue
                     if self.paused:
                         self._handle_pause_key(event.key); continue
-                    if event.key == pygame.K_a:
+                    if event.key == pygame.K_TAB:
                         self.inventory.changer_etat_fenetre()
                     if event.key == pygame.K_e and not (
                             self.editor.active and self.editor._text_mode):
@@ -334,5 +335,7 @@ class Game:
                 self.screen.blit(ms, (10, self.screen.get_height()-25))
 
             self.inventory.draw(self.screen, 6, 5)
+            self.inventory.drag_drop(events)
+
             self._draw_fade()
             pygame.display.flip()
