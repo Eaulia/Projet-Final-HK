@@ -114,6 +114,8 @@ class Editor:
         self.mob_can_turn_randomly   = False
         self.mob_respawn_timeout     = 10.0
         self.mob_jump_power          = 400
+        self.mob_patrol_speed        = 120
+        self.mob_chase_speed         = 200
         self._enemy_sprites          = []
         self._refresh_sprites()
 
@@ -144,11 +146,10 @@ class Editor:
         os.makedirs(MAPS_DIR,    exist_ok=True)
         os.makedirs(RESTORE_DIR, exist_ok=True)
 
-    # ── Fonts ─────────────────────────────────────────────────────────────
     def _get_font(self):
         if self._font is None:
-            self._font       = pygame.font.SysFont("Consolas", 16)
-            self._font_small = pygame.font.SysFont("Consolas", 13)
+            self._font       = pygame.font.SysFont("Consolas", 15)
+            self._font_small = pygame.font.SysFont("Consolas", 12)
         return self._font
 
     def _refresh_sprites(self):
@@ -311,7 +312,7 @@ class Editor:
         if key == pygame.K_r and (mods & pygame.KMOD_CTRL):
             restores = self._list_restore_points()
             if not restores:
-                self._show_msg("Aucun point de restauration — utilisez [S] pour sauvegarder d'abord")
+                self._show_msg("Aucun point de restauration — sauvegardez d'abord avec [S]")
             elif self._restore_confirm:
                 self._load_restore_point(restores[-1])
                 self._restore_confirm       = False
@@ -344,7 +345,7 @@ class Editor:
         elif key in (pygame.K_UP, pygame.K_DOWN, pygame.K_HOME, pygame.K_END,
                      pygame.K_LEFT, pygame.K_RIGHT):
             if self.has_holes:
-                self._show_msg("Phase 2 active — structure verrouillée  |  [Ctrl+R]=restaurer  [N]=nouvelle map")
+                self._show_msg("Phase 2 — structure verrouillée  |  Ctrl+R=restaurer  N=nouvelle map")
                 return None
             self._snapshot()
             if   key == pygame.K_UP:   settings.GROUND_Y  = max(100,  settings.GROUND_Y-20)
@@ -363,21 +364,51 @@ class Editor:
         elif key == pygame.K_PAGEUP:
             if self.mode == 1 and self.mob_detect_mode and self._detect_target:
                 self._detect_target.jump_power = min(800, self._detect_target.jump_power + 50)
-                self._show_msg(f"Jump power ennemi = {self._detect_target.jump_power}")
+                self._show_msg(f"Jump ennemi = {self._detect_target.jump_power}")
             elif self.mode == 1:
                 self.mob_jump_power = min(800, self.mob_jump_power + 50)
-                self._show_msg(f"Hauteur de saut : {self.mob_jump_power}")
+                self._show_msg(f"Jump : {self.mob_jump_power}")
             else:
                 self.camera.y_offset = max(-400, self.camera.y_offset-20)
         elif key == pygame.K_PAGEDOWN:
             if self.mode == 1 and self.mob_detect_mode and self._detect_target:
                 self._detect_target.jump_power = max(100, self._detect_target.jump_power - 50)
-                self._show_msg(f"Jump power ennemi = {self._detect_target.jump_power}")
+                self._show_msg(f"Jump ennemi = {self._detect_target.jump_power}")
             elif self.mode == 1:
                 self.mob_jump_power = max(100, self.mob_jump_power - 50)
-                self._show_msg(f"Hauteur de saut : {self.mob_jump_power}")
+                self._show_msg(f"Jump : {self.mob_jump_power}")
             else:
                 self.camera.y_offset = min(400, self.camera.y_offset+20)
+
+        # ── Vitesses : F1/F2 patrol, F3/F4 chase ─────────────────────────
+        elif key == pygame.K_F1 and self.mode == 1:
+            if self.mob_detect_mode and self._detect_target:
+                self._detect_target.patrol_speed = max(20, self._detect_target.patrol_speed - 20)
+                self._show_msg(f"Vitesse patrouille ennemi = {self._detect_target.patrol_speed}")
+            else:
+                self.mob_patrol_speed = max(20, self.mob_patrol_speed - 20)
+                self._show_msg(f"Vitesse patrouille : {self.mob_patrol_speed}")
+        elif key == pygame.K_F2 and self.mode == 1:
+            if self.mob_detect_mode and self._detect_target:
+                self._detect_target.patrol_speed = min(500, self._detect_target.patrol_speed + 20)
+                self._show_msg(f"Vitesse patrouille ennemi = {self._detect_target.patrol_speed}")
+            else:
+                self.mob_patrol_speed = min(500, self.mob_patrol_speed + 20)
+                self._show_msg(f"Vitesse patrouille : {self.mob_patrol_speed}")
+        elif key == pygame.K_F3 and self.mode == 1:
+            if self.mob_detect_mode and self._detect_target:
+                self._detect_target.chase_speed = max(20, self._detect_target.chase_speed - 20)
+                self._show_msg(f"Vitesse poursuite ennemi = {self._detect_target.chase_speed}")
+            else:
+                self.mob_chase_speed = max(20, self.mob_chase_speed - 20)
+                self._show_msg(f"Vitesse poursuite : {self.mob_chase_speed}")
+        elif key == pygame.K_F4 and self.mode == 1:
+            if self.mob_detect_mode and self._detect_target:
+                self._detect_target.chase_speed = min(600, self._detect_target.chase_speed + 20)
+                self._show_msg(f"Vitesse poursuite ennemi = {self._detect_target.chase_speed}")
+            else:
+                self.mob_chase_speed = min(600, self.mob_chase_speed + 20)
+                self._show_msg(f"Vitesse poursuite : {self.mob_chase_speed}")
 
         elif key==pygame.K_t and self.mode==2:
             self.light_type_index=(self.light_type_index+1)%len(LIGHT_TYPES)
@@ -517,7 +548,7 @@ class Editor:
             elif kind=="hole":
                 if not self.has_holes:
                     name = self._save_restore_point()
-                    self._show_msg(f"Point de restauration créé : {name}  |  Phase 2 active")
+                    self._show_msg(f"Point de restauration créé : {name}")
                 self.apply_hole(pygame.Rect(x,y,w,h))
             elif kind=="copy_select":
                 self._copy_rect=pygame.Rect(x,y,w,h)
@@ -539,7 +570,9 @@ class Editor:
             can_fall_in_holes=self.mob_can_fall_in_holes,
             can_turn_randomly=self.mob_can_turn_randomly,
             respawn_timeout=self.mob_respawn_timeout,
-            jump_power=self.mob_jump_power))
+            jump_power=self.mob_jump_power,
+            patrol_speed=self.mob_patrol_speed,
+            chase_speed=self.mob_chase_speed))
 
     def _click_mob_patrol(self, wx, wy):
         if self._patrol_target is None:
@@ -666,9 +699,10 @@ class Editor:
                 dr=self.camera.apply(self._detect_target._detect_rect())
                 pygame.draw.rect(surf,(255,255,0),dr,2)
                 font=self._get_font()
+                e=self._detect_target
                 surf.blit(font.render(
-                    f"Portee:{self._detect_target.detect_range} Dir:{'D' if self._detect_target.direction>0 else 'G'} Jump:{self._detect_target.jump_power}",
-                    True,(255,255,0)),(dr.x,dr.y-18))
+                    f"Det:{e.detect_range}  Jump:{e.jump_power}  Patr:{e.patrol_speed}  Chas:{e.chase_speed}",
+                    True,(255,255,0)),(dr.x, dr.y-18))
         elif self.mode==6: self._draw_hitbox_editor(surf,mouse_pos)
         if self.mode==8:   self._draw_copy_paste_preview(surf,mouse_pos)
 
@@ -726,8 +760,13 @@ class Editor:
         surf.blit(font.render("SPAWN",True,(0,150,255)),(sx-font.size("SPAWN")[0]//2,sy-22))
         for portal in self.portals: portal.draw(surf,self.camera,font)
 
+    # ── HUD ───────────────────────────────────────────────────────────────
     def draw_hud(self, surf, dt=0.016):
-        font=self._get_font(); small=self._font_small; w=surf.get_width(); sh=surf.get_height()
+        self._get_font()
+        font  = self._font
+        small = self._font_small
+        w  = surf.get_width()
+        sh = surf.get_height()
 
         if self._hud_msg_timer > 0:
             self._hud_msg_timer = max(0.0, self._hud_msg_timer - dt)
@@ -737,119 +776,132 @@ class Editor:
                 self._restore_confirm = False
                 self._show_msg("Restauration annulée (délai expiré)")
 
-        if self._text_mode: self._draw_text_box(surf); return
+        if self._text_mode:
+            self._draw_text_box(surf); return
 
-        panel=pygame.Surface((w,90),pygame.SRCALPHA); panel.fill((0,0,0,180)); surf.blit(panel,(0,0))
+        # Panel fond
+        PANEL_H = 94
+        panel = pygame.Surface((w, PANEL_H), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 190))
+        surf.blit(panel, (0, 0))
 
-        phase_color=(255,120,40) if self.has_holes else (0,255,120)
-        phase_label="PHASE 2 — trous" if self.has_holes else "PHASE 1 — structure"
-        surf.blit(font.render(
-            f"EDITEUR [{self.mode+1}/9] {self._mode_names[self.mode]}"
-            f"{'  [Hitbox]' if self.show_hitboxes else ''}  |  {phase_label}",
-            True,phase_color),(10,6))
+        # Ligne 0 — titre + phase + infos structure
+        phase_color = (255,120,40) if self.has_holes else (0,255,120)
+        phase_lbl   = "PHASE 2" if self.has_holes else "PHASE 1"
+        hb_lbl      = "  [H:ON]" if self.show_hitboxes else ""
+        titre = f"MODE {self.mode+1}/9 — {self._mode_names[self.mode]}{hb_lbl}   {phase_lbl}"
+        surf.blit(font.render(titre, True, phase_color), (8, 4))
+        info = f"Sol:{settings.GROUND_Y}  Plaf:{settings.CEILING_Y}  Scène:{settings.SCENE_WIDTH}  Cam:{self.camera.y_offset}"
+        surf.blit(small.render(info, True, (220,200,80)), (w - small.size(info)[0] - 8, 6))
 
-        info=f"Sol:{settings.GROUND_Y} Plaf:{settings.CEILING_Y} Scene:{settings.SCENE_WIDTH} Cam:{self.camera.y_offset}"
-        surf.blit(small.render(info,True,(255,255,0)),(w-small.size(info)[0]-10,6))
-
-        y2=28
-        if self.mode==0:
-            surf.blit(font.render("Clic G x2=rect | Clic D=suppr | [Ctrl+Z]=annuler",True,(200,200,255)),(10,y2))
-        elif self.mode==1:
-            gc =(0,255,0) if self.mob_gravity            else (255,80,80)
-            cc =(0,255,0) if self.mob_collision           else (255,80,80)
-            jc =(0,255,0) if self.mob_can_jump            else (255,80,80)
-            vpc=(0,255,0) if self.mob_can_jump_patrol     else (255,80,80)
-            lc =(0,255,0) if self.mob_has_light           else (255,80,80)
-            oc =(0,255,0) if self.mob_can_fall_in_holes   else (255,80,80)
-            uc =(0,255,0) if self.mob_can_turn_randomly   else (255,80,80)
-            rt =f"{self.mob_respawn_timeout:.0f}s" if self.mob_respawn_timeout>0 else "OFF"
-            surf.blit(font.render(f"[G]:{self.mob_gravity}",              True,gc), (10,y2))
-            surf.blit(font.render(f"[C]:{self.mob_collision}",            True,cc), (120,y2))
-            surf.blit(font.render(f"[J]:{self.mob_can_jump}",             True,jc), (240,y2))
-            surf.blit(font.render(f"[V]patr:{self.mob_can_jump_patrol}",  True,vpc),(360,y2))
-            surf.blit(font.render(f"[I]:{self.mob_has_light}",            True,lc), (530,y2))
-            surf.blit(font.render(f"[O]Trou:{self.mob_can_fall_in_holes}",True,oc), (640,y2))
-            surf.blit(font.render(f"[U]Rand:{self.mob_can_turn_randomly}",True,uc), (810,y2))
+        # Ligne 1 — contenu principal
+        L1 = 24
+        if self.mode == 0:
+            surf.blit(small.render("Clic G×2=rectangle  |  Clic D=supprimer  |  Ctrl+Z=annuler",
+                True, (180,180,255)), (8, L1))
+        elif self.mode == 1:
+            def b(label, val, key):
+                c = (80,255,120) if val else (255,80,80)
+                return font.render(f"[{key}]{label}", True, c)
+            x = 8
+            for s in [b("Grav",self.mob_gravity,"G"), b("Coll",self.mob_collision,"C"),
+                      b("Saut",self.mob_can_jump,"J"), b("SautP",self.mob_can_jump_patrol,"V"),
+                      b("Lum",self.mob_has_light,"I"), b("Trou",self.mob_can_fall_in_holes,"O"),
+                      b("Rand",self.mob_can_turn_randomly,"U")]:
+                surf.blit(s, (x, L1)); x += s.get_width() + 10
+        elif self.mode == 2:
             surf.blit(small.render(
-                f"[T]:{self._current_sprite()}  Det:{self.mob_detect_range}  "
-                f"[*/÷]Resp:{rt}  [PgUp/Dn]Jump:{self.mob_jump_power}",
-                True,(200,200,255)),(10,50))
-            if self.mob_patrol_mode:
-                ptxt=("[P] ON: clic sur mob" if self._patrol_target is None else
-                      "[P] clic=limite G" if self._patrol_first_x is None else
-                      f"[P] clic=limite D (G={self._patrol_first_x})")
-                surf.blit(small.render(ptxt,True,(255,200,0)),(500,50))
-            elif self.mob_detect_mode:
-                dtxt=("[D] ON: clic sur mob" if self._detect_target is None
-                      else f"[D] portee={self._detect_target.detect_range} [+/-]  jump={self._detect_target.jump_power} [PgUp/Dn]")
-                surf.blit(small.render(dtxt,True,(255,150,0)),(500,50))
-            else:
-                surf.blit(small.render("[P]atrouille [D]etection",True,(140,140,140)),(500,50))
-        elif self.mode==2:
-            fc=(0,255,0) if self.light_flicker else (255,80,80)
-            surf.blit(font.render(
-                f"[T]{LIGHT_TYPES[self.light_type_index]} [F]{'ON' if self.light_flicker else 'OFF'} Spd:{self.light_flicker_speed}",
-                True,(255,200,100)),(10,y2))
-        elif self.mode==3:
-            surf.blit(font.render(f"Clic=spawn [R]espawn [B]ase ({self.spawn_x},{self.spawn_y})",
-                True,(100,200,255)),(10,y2))
-        elif self.mode==4:
-            surf.blit(font.render(f"Clic G x2=portail | Clic D=suppr | {len(self.portals)}",
-                True,(0,180,255)),(10,y2))
-        elif self.mode==5:
-            surf.blit(font.render(f"Clic G x2=mur | Clic D=suppr | {len(self.custom_walls)}",
-                True,(180,180,180)),(10,y2))
-        elif self.mode==6:
-            name=self._enemy_sprites[self._hb_sprite_index%len(self._enemy_sprites)] if self._enemy_sprites else "?"
-            hbd=get_hitbox(name)
-            surf.blit(font.render(f"[T]:{name} | Clic x2=hitbox | {hbd['w']}x{hbd['h']}",
-                True,(255,100,100)),(10,y2))
-        elif self.mode==7:
+                f"[T] Type:{LIGHT_TYPES[self.light_type_index]}   [F] Flicker:{'ON' if self.light_flicker else 'OFF'}   Vitesse:{self.light_flicker_speed}",
+                True, (255,200,100)), (8, L1))
+        elif self.mode == 3:
+            surf.blit(small.render(
+                f"Clic=poser spawn  [R]=respawn  [B]=base  Spawn:({self.spawn_x},{self.spawn_y})",
+                True, (100,200,255)), (8, L1))
+        elif self.mode == 4:
+            surf.blit(small.render(f"Clic G×2=portail  |  Clic D=supprimer  |  {len(self.portals)} portail(s)",
+                True, (0,180,255)), (8, L1))
+        elif self.mode == 5:
+            surf.blit(small.render(f"Clic G×2=mur  |  Clic D=supprimer  |  {len(self.custom_walls)} mur(s)",
+                True, (180,180,180)), (8, L1))
+        elif self.mode == 6:
+            name = self._enemy_sprites[self._hb_sprite_index % len(self._enemy_sprites)] if self._enemy_sprites else "?"
+            hbd  = get_hitbox(name)
+            surf.blit(small.render(f"[T] Sprite:{name}   Hitbox:{hbd['w']}×{hbd['h']}   Clic×2=redéfinir",
+                True, (255,100,100)), (8, L1))
+        elif self.mode == 7:
             restores = self._list_restore_points()
-            rinfo = f"dernier: {restores[-1]}" if restores else "aucun"
-            surf.blit(font.render(
-                f"Clic G x2=trou permanent | [Ctrl+Z]=annuler | {len(self.holes)} trou(s) | restore: {rinfo}",
-                True,(255,80,80)),(10,y2))
-        elif self.mode==8:
+            r = f"dernier:{restores[-1]}" if restores else "aucun"
+            surf.blit(small.render(
+                f"Clic G×2=trou  |  Ctrl+Z=annuler  |  {len(self.holes)} trou(s)  |  Restore:{r}",
+                True, (255,80,80)), (8, L1))
+        elif self.mode == 8:
             if not self._has_clipboard:
-                txt="[C]=copier | Clic D=effacer" if self._copy_rect else "Clic G x2=zone | [C]=copier"
-                surf.blit(font.render(txt,True,(255,200,0)),(10,y2))
+                t = "[C]=copier  |  Clic D=effacer" if self._copy_rect else "Clic G×2=sélectionner zone  |  [C]=copier"
             else:
-                nb=len(self._clipboard_platforms)+len(self._clipboard_walls)
-                surf.blit(font.render(f"Clipboard:{nb} | Clic=coller | Clic D=effacer",True,(255,200,0)),(10,y2))
+                nb = len(self._clipboard_platforms)+len(self._clipboard_walls)
+                t = f"Clipboard:{nb} élément(s)  |  Clic=coller  |  Clic D=effacer"
+            surf.blit(small.render(t, True, (255,200,0)), (8, L1))
 
-        surf.blit(small.render(
-            "[M]ode [H]itbox [N]ew [S]ave [L]oad [R]espawn [Ctrl+Z]annuler [Ctrl+R]restaurer",
-            True,(140,140,140)),(10,70))
+        # Ligne 2 — paramètres numériques (mode mob uniquement)
+        L2 = 44
+        if self.mode == 1:
+            rt = f"{self.mob_respawn_timeout:.0f}s" if self.mob_respawn_timeout > 0 else "OFF"
+            sprite_short = self._current_sprite().replace(".png","").replace(".jpg","")
+            line2 = (f"[T]{sprite_short}  "
+                     f"Det:{self.mob_detect_range}[+/-]  "
+                     f"Jump:{self.mob_jump_power}[PgUp/Dn]  "
+                     f"Resp:{rt}[*/÷]  "
+                     f"Patr:{self.mob_patrol_speed}[F1/F2]  "
+                     f"Chas:{self.mob_chase_speed}[F3/F4]")
+            surf.blit(small.render(line2, True, (180,220,255)), (8, L2))
 
+        # Ligne 3 — sous-modes ou raccourcis globaux
+        L3 = 64
+        if self.mode == 1:
+            if self.mob_patrol_mode:
+                if   self._patrol_target is None:  txt = "[P] Patrouille ON — clic sur un ennemi"
+                elif self._patrol_first_x is None: txt = "[P] Clic = borne gauche"
+                else:                              txt = f"[P] Clic = borne droite  (gauche={self._patrol_first_x})"
+                surf.blit(small.render(txt, True, (255,200,0)), (8, L3))
+            elif self.mob_detect_mode:
+                if self._detect_target is None:
+                    txt = "[D] Détection ON — clic sur un ennemi"
+                else:
+                    e = self._detect_target
+                    txt = f"[D] Sélectionné — Det:{e.detect_range}[+/-]  Jump:{e.jump_power}[PgUp/Dn]  Patr:{e.patrol_speed}[F1/F2]  Chas:{e.chase_speed}[F3/F4]"
+                surf.blit(small.render(txt, True, (255,150,0)), (8, L3))
+            else:
+                surf.blit(small.render(
+                    "[P]=patrouille  [D]=détection  |  Clic G=placer ennemi  Clic D=supprimer",
+                    True, (120,120,120)), (8, L3))
+        else:
+            surf.blit(small.render(
+                "[M]=mode  [H]=hitbox  [N]=nouvelle map  [S]=sauver  [L]=charger  [R]=respawn  Ctrl+Z=annuler  Ctrl+R=restaurer",
+                True, (110,110,110)), (8, L3))
+
+        # Message temporaire centré en bas
         if self._hud_msg and self._hud_msg_timer > 0:
-            if self._restore_confirm:
-                mc = (255,100,0)
-            elif "restaur" in self._hud_msg or "Annulé" in self._hud_msg:
-                mc = (255,200,0)
-            elif "verrouillée" in self._hud_msg:
-                mc = (255,80,80)
-            else:
-                mc = (180,255,180)
+            if self._restore_confirm:           mc = (255,140,0)
+            elif "Annulé" in self._hud_msg:     mc = (255,220,0)
+            elif "verrouillée" in self._hud_msg: mc = (255,80,80)
+            else:                               mc = (140,255,160)
             msg_surf = small.render(self._hud_msg, True, mc)
-            mw = msg_surf.get_width() + 20
+            mw = msg_surf.get_width() + 24
             mh = msg_surf.get_height() + 10
             bg  = pygame.Surface((mw, mh), pygame.SRCALPHA)
-            bg.fill((0,0,0,190))
-            bx = (w - mw) // 2
-            by = sh - 48
-            surf.blit(bg,       (bx, by))
-            surf.blit(msg_surf, (bx+10, by+5))
+            bg.fill((0, 0, 0, 200))
+            surf.blit(bg,       ((w-mw)//2, sh-52))
+            surf.blit(msg_surf, ((w-mw)//2 + 12, sh-52+5))
 
     def _draw_text_box(self, surf):
         font=self._get_font(); w,h=surf.get_size()
         overlay=pygame.Surface((w,h),pygame.SRCALPHA); overlay.fill((0,0,0,150)); surf.blit(overlay,(0,0))
-        bw,bh=540,130; bx,by=(w-bw)//2,(h-bh)//2
+        bw,bh=560,130; bx,by=(w-bw)//2,(h-bh)//2
         pygame.draw.rect(surf,(30,20,40),(bx,by,bw,bh))
         pygame.draw.rect(surf,(100,200,255),(bx,by,bw,bh),2)
         surf.blit(font.render(self._text_prompt,True,(200,200,255)),(bx+15,by+15))
         surf.blit(font.render(self._text_input+"_",True,(255,255,255)),(bx+15,by+52))
-        surf.blit(font.render("[Entrée]=valider  [Échap]=annuler",True,(140,140,140)),(bx+15,by+90))
+        surf.blit(font.render("[Entrée]=valider   [Échap]=annuler",True,(140,140,140)),(bx+15,by+90))
 
     def _save_to(self, fp):
         data = self._build_save_data()
@@ -945,7 +997,9 @@ class Editor:
                 patrol_right=e.get("patrol_right",-1),
                 can_fall_in_holes=e.get("can_fall_in_holes",False),
                 respawn_timeout=e.get("respawn_timeout",10.0),
-                can_turn_randomly=e.get("can_turn_randomly",False)))
+                can_turn_randomly=e.get("can_turn_randomly",False),
+                patrol_speed=e.get("patrol_speed",120),
+                chase_speed=e.get("chase_speed",200)))
 
         self.lighting.lights.clear()
         for l in data.get("lights",[]):
