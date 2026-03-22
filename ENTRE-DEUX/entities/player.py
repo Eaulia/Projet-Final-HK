@@ -37,6 +37,7 @@ class Player:
         # Vie
         self.max_hp = 5
         self.hp = self.max_hp
+        self.dead = False
         self.show_hp_timer = 0.0   # temps restant pour afficher la vie
         self.HP_DISPLAY_DURATION = 2.0  # secondes
 
@@ -61,9 +62,10 @@ class Player:
         self.knockback_vx = 0
         self.on_ground = False
         self.hp = self.max_hp
+        self.dead = False
 
     def hit_by_enemy(self, enemy_rect):
-        if self.invincible:
+        if self.invincible or self.dead:
             return
         if self.rect.centerx < enemy_rect.centerx:
             self.knockback_vx = -300
@@ -75,7 +77,7 @@ class Player:
         self.hp -= 1
         self.show_hp_timer = self.HP_DISPLAY_DURATION
         if self.hp <= 0:
-            self.respawn()
+            self.dead = True
 
     def mouvement(self, dt, keys, holes=None):
         self.vx = 0

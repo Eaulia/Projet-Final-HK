@@ -1,0 +1,322 @@
+{
+  "ground_y": 610,
+  "ceiling_y": 0,
+  "scene_width": 2700,
+  "camera_y_offset": 150,
+  "spawn": {
+    "x": 89,
+    "y": 578
+  },
+  "bg_color": [
+    38,
+    19,
+    46
+  ],
+  "wall_color": [
+    0,
+    0,
+    0
+  ],
+  "platforms": [
+    {
+      "x": 400,
+      "y": 300,
+      "w": 100,
+      "h": 20
+    },
+    {
+      "x": 1779,
+      "y": 717,
+      "w": 116,
+      "h": 37
+    },
+    {
+      "x": 1969,
+      "y": 841,
+      "w": 89,
+      "h": 5
+    },
+    {
+      "x": 2297,
+      "y": 717,
+      "w": 79,
+      "h": 220
+    },
+    {
+      "x": 670,
+      "y": 466,
+      "w": 24,
+      "h": 18
+    },
+    {
+      "x": 703,
+      "y": 461,
+      "w": 41,
+      "h": 5
+    },
+    {
+      "x": 754,
+      "y": 455,
+      "w": 25,
+      "h": 27
+    },
+    {
+      "x": 754,
+      "y": 488,
+      "w": 22,
+      "h": 29
+    },
+    {
+      "x": 719,
+      "y": 524,
+      "w": 24,
+      "h": 23
+    },
+    {
+      "x": 694,
+      "y": 545,
+      "w": 4,
+      "h": 22
+    },
+    {
+      "x": 710,
+      "y": 534,
+      "w": 4,
+      "h": 21
+    },
+    {
+      "x": 676,
+      "y": 572,
+      "w": 13,
+      "h": 9
+    },
+    {
+      "x": 683,
+      "y": 596,
+      "w": 21,
+      "h": 12
+    },
+    {
+      "x": 724,
+      "y": 591,
+      "w": 10,
+      "h": 26
+    },
+    {
+      "x": 753,
+      "y": 598,
+      "w": 34,
+      "h": 13
+    },
+    {
+      "x": 801,
+      "y": 592,
+      "w": 7,
+      "h": 20
+    }
+  ],
+  "custom_walls": [
+    {
+      "x": 982,
+      "y": 338,
+      "w": 58,
+      "h": 133
+    }
+  ],
+  "ground_segments": [
+    {
+      "x": 0,
+      "y": 610,
+      "w": 2700,
+      "h": 800
+    }
+  ],
+  "ceiling_segments": [
+    {
+      "x": 0,
+      "y": -800,
+      "w": 2700,
+      "h": 800
+    }
+  ],
+  "left_segments": [
+    {
+      "x": -800,
+      "y": -800,
+      "w": 800,
+      "h": 2210
+    }
+  ],
+  "right_segments": [
+    {
+      "x": 2700,
+      "y": -800,
+      "w": 800,
+      "h": 2210
+    }
+  ],
+  "holes": [],
+  "enemies": [
+    {
+      "x": 1018,
+      "y": 530,
+      "has_gravity": true,
+      "has_collision": true,
+      "sprite_name": "monstre_perdu.png",
+      "can_jump": false,
+      "can_jump_patrol": false,
+      "jump_power": 400,
+      "detect_range": 200,
+      "detect_height": 80,
+      "has_light": false,
+      "light_type": "dim",
+      "light_radius": 100,
+      "patrol_left": 700,
+      "patrol_right": 1300,
+      "can_fall_in_holes": false,
+      "respawn_timeout": 10.0,
+      "can_turn_randomly": false,
+      "patrol_speed": 120,
+      "chase_speed": 200
+    },
+    {
+      "x": 919,
+      "y": 530,
+      "has_gravity": true,
+      "has_collision": true,
+      "sprite_name": "monstre_perdu.png",
+      "can_jump": false,
+      "can_jump_patrol": false,
+      "jump_power": 400,
+      "detect_range": 200,
+      "detect_height": 80,
+      "has_light": false,
+      "light_type": "dim",
+      "light_radius": 100,
+      "patrol_left": 866,
+      "patrol_right": 1466,
+      "can_fall_in_holes": false,
+      "respawn_timeout": 10.0,
+      "can_turn_randomly": false,
+      "patrol_speed": 120,
+      "chase_speed": 200
+    },
+    {
+      "x": 1536,
+      "y": 530,
+      "has_gravity": true,
+      "has_collision": true,
+      "sprite_name": "monstre_perdu.png",
+      "can_jump": false,
+      "can_jump_patrol": false,
+      "jump_power": 400,
+      "detect_range": 200,
+      "detect_height": 80,
+      "has_light": false,
+      "light_type": "dim",
+      "light_radius": 100,
+      "patrol_left": 1483,
+      "patrol_right": 2083,
+      "can_fall_in_holes": false,
+      "respawn_timeout": 10.0,
+      "can_turn_randomly": false,
+      "patrol_speed": 120,
+      "chase_speed": 200
+    },
+    {
+      "x": 1618,
+      "y": 530,
+      "has_gravity": true,
+      "has_collision": true,
+      "sprite_name": "monstre_perdu.png",
+      "can_jump": false,
+      "can_jump_patrol": false,
+      "jump_power": 400,
+      "detect_range": 200,
+      "detect_height": 80,
+      "has_light": false,
+      "light_type": "dim",
+      "light_radius": 100,
+      "patrol_left": 1565,
+      "patrol_right": 2165,
+      "can_fall_in_holes": false,
+      "respawn_timeout": 10.0,
+      "can_turn_randomly": false,
+      "patrol_speed": 120,
+      "chase_speed": 200
+    },
+    {
+      "x": 922,
+      "y": 530,
+      "has_gravity": true,
+      "has_collision": true,
+      "sprite_name": "monstre_perdu.png",
+      "can_jump": false,
+      "can_jump_patrol": false,
+      "jump_power": 400,
+      "detect_range": 200,
+      "detect_height": 80,
+      "has_light": false,
+      "light_type": "dim",
+      "light_radius": 100,
+      "patrol_left": 686,
+      "patrol_right": 1286,
+      "can_fall_in_holes": false,
+      "respawn_timeout": 10.0,
+      "can_turn_randomly": false,
+      "patrol_speed": 120,
+      "chase_speed": 200
+    },
+    {
+      "x": 1384,
+      "y": 530,
+      "has_gravity": true,
+      "has_collision": true,
+      "sprite_name": "monstre_perdu.png",
+      "can_jump": false,
+      "can_jump_patrol": false,
+      "jump_power": 400,
+      "detect_range": 200,
+      "detect_height": 80,
+      "has_light": false,
+      "light_type": "dim",
+      "light_radius": 100,
+      "patrol_left": 1331,
+      "patrol_right": 1931,
+      "can_fall_in_holes": false,
+      "respawn_timeout": 10.0,
+      "can_turn_randomly": false,
+      "patrol_speed": 120,
+      "chase_speed": 200
+    }
+  ],
+  "lights": [
+    {
+      "x": 300,
+      "y": 480,
+      "radius": 150,
+      "type": "torch",
+      "flicker": true,
+      "flicker_speed": 5
+    },
+    {
+      "x": 600,
+      "y": 380,
+      "radius": 200,
+      "type": "torch",
+      "flicker": true,
+      "flicker_speed": 5
+    }
+  ],
+  "portals": [
+    {
+      "x": 22,
+      "y": 504,
+      "w": 6,
+      "h": 102,
+      "target_map": "map1",
+      "target_x": -1,
+      "target_y": -1
+    }
+  ]
+}

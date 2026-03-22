@@ -1,0 +1,12 @@
+{
+  "histoire": [
+    {
+      "nom": "1",
+      "maps": [
+        "map1",
+        "map2"
+      ]
+    }
+  ],
+  "carte_debut": "map1"
+}

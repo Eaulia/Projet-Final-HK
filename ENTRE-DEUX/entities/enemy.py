@@ -31,11 +31,33 @@ def _get_debug_fonts():
 
 def list_enemy_sprites():
     sprites = []
-    if os.path.isdir(ENEMIES_DIR):
-        for f in sorted(os.listdir(ENEMIES_DIR)):
-            if f.endswith((".png", ".jpg")):
+    if not os.path.isdir(ENEMIES_DIR):
+        return sprites
+    for f in sorted(os.listdir(ENEMIES_DIR)):
+        full = os.path.join(ENEMIES_DIR, f)
+        if f.endswith((".png", ".jpg")):
+            sprites.append(f)
+        elif os.path.isdir(full):
+            # Sprite animé : dossier contenant des frames numérotées
+            frames = [g for g in sorted(os.listdir(full)) if g.endswith((".png", ".jpg"))]
+            if frames:
                 sprites.append(f)
     return sprites
+
+
+def _charger_frames(sprite_name):
+    """Charge les images pour un sprite (unique ou animé)."""
+    chemin = os.path.join(ENEMIES_DIR, sprite_name)
+    if os.path.isdir(chemin):
+        # Dossier d'animation — trie les fichiers par numéro
+        fichiers = sorted(
+            (g for g in os.listdir(chemin) if g.endswith((".png", ".jpg"))),
+            key=lambda s: int("".join(filter(str.isdigit, s)) or "0"),
+        )
+        return [pygame.image.load(os.path.join(chemin, ff)) for ff in fichiers]
+    if os.path.exists(chemin):
+        return [pygame.image.load(chemin)]
+    return [pygame.image.load(find_file(sprite_name))]
 
 
 def _nearby(walls, rect, margin=_CULL_DIST):
@@ -66,12 +88,12 @@ class Enemy:
         self.rect = pygame.Rect(x, y, self.hitbox_w, self.hitbox_h)
 
         self.sprite_name = sprite_name
-        sprite_path = os.path.join(ENEMIES_DIR, sprite_name)
-        img = pygame.image.load(sprite_path if os.path.exists(sprite_path)
-                                else find_file(sprite_name))
-        self.sprite_w  = img.get_width()
-        self.sprite_h  = img.get_height()
-        self.idle_anim = Animation([img], img_dur=20)
+        frames = _charger_frames(sprite_name)
+        self.sprite_w  = frames[0].get_width()
+        self.sprite_h  = frames[0].get_height()
+        # Sprites animés : 4 frames/image → ~20fps sur 80fps ; statiques : 20 frames/image
+        img_dur = 4 if len(frames) > 1 else 20
+        self.idle_anim = Animation(frames, img_dur=img_dur)
 
         self.patrol_speed = patrol_speed   # vitesse patrouille (configurable)
         self.chase_speed  = chase_speed    # vitesse poursuite (configurable)
@@ -177,7 +199,8 @@ class Enemy:
         return True
 
     def _is_in_patrol_zone(self):
-        return self.patrol_left <= self.rect.centerx <= self.patrol_right
+        eps = 5
+        return self.patrol_left - eps <= self.rect.centerx <= self.patrol_right + eps
 
     def _can_reach_player_vertically(self, player_rect):
         if not self.can_jump:

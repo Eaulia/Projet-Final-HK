@@ -4,70 +4,72 @@
 
 import pygame
 from settings import *
+from world.collision import resoudre_collision
+
+_cache_images = {}   # évite de recharger le même fichier plusieurs fois
 
 
 class Platform:
+    """Surface sur laquelle on peut marcher. Pousse l'entité quelle que soit sa direction."""
+
     def __init__(self, x, y, width, height, color):
         self.rect  = pygame.Rect(x, y, width, height)
         self.color = color
 
-    def verifier_collision(self, player):
-        if not player.rect.colliderect(self.rect):
-            return
-        ol = player.rect.right  - self.rect.left
-        or_ = self.rect.right   - player.rect.left
-        ot = player.rect.bottom - self.rect.top
-        ob = self.rect.bottom   - player.rect.top
-        mn = min(ol, or_, ot, ob)
-        if mn == ot and player.vy >= 0:
-            player.rect.bottom = self.rect.top;  player.vy = 0; player.on_ground = True
-        elif mn == ob and player.vy <= 0:
-            player.rect.top    = self.rect.bottom; player.vy = 0
-        elif mn == ol:
-            player.rect.right  = self.rect.left;  player.vx = 0
-        elif mn == or_:
-            player.rect.left   = self.rect.right;  player.vx = 0
+    def verifier_collision(self, entite):
+        resoudre_collision(entite, self.rect, mode_mur=False)
 
     def draw(self, surf, camera):
         pygame.draw.rect(surf, self.color, camera.apply(self.rect))
 
 
 class Wall:
+    """Mur qui bloque selon la direction de déplacement (évite les projections parasites)."""
+
     def __init__(self, x, y, width, height, visible=False,
                  player_only=False, is_border=False):
         self.rect        = pygame.Rect(x, y, width, height)
         self.visible     = visible
-        self.player_only = player_only   # ignoré par les ennemis
-        self.is_border   = is_border     # segment de bordure (sol/plafond/côtés)
-                                         # → ignoré par _has_line_of_sight
+        self.player_only = player_only  # si True, les ennemis passent au travers
+        self.is_border   = is_border    # bordure de scène, ignorée par le raycasting
 
-    def verifier_collision(self, player):
-        if not player.rect.colliderect(self.rect):
-            return
-        ol  = player.rect.right  - self.rect.left
-        or_ = self.rect.right    - player.rect.left
-        ot  = player.rect.bottom - self.rect.top
-        ob  = self.rect.bottom   - player.rect.top
-        mn  = min(ol, or_, ot, ob)
-
-        if mn == ot and player.vy >= 0:
-            player.rect.bottom = self.rect.top;   player.vy = 0; player.on_ground = True
-        elif mn == ob and player.vy <= 0:
-            player.rect.top    = self.rect.bottom; player.vy = 0
-        elif mn == ol and player.vx >= 0:
-            player.rect.right  = self.rect.left;   player.vx = 0
-        elif mn == or_ and player.vx <= 0:
-            player.rect.left   = self.rect.right;  player.vx = 0
-        else:
-            if mn == ot:
-                player.rect.bottom = self.rect.top;   player.vy = 0; player.on_ground = True
-            elif mn == ob:
-                player.rect.top    = self.rect.bottom; player.vy = 0
-            elif mn == ol:
-                player.rect.right  = self.rect.left;   player.vx = 0
-            elif mn == or_:
-                player.rect.left   = self.rect.right;  player.vx = 0
+    def verifier_collision(self, entite):
+        resoudre_collision(entite, self.rect, mode_mur=True)
 
     def draw(self, surf, camera):
         if self.visible:
             pygame.draw.rect(surf, (0, 0, 0), camera.apply(self.rect))
+
+
+class Decor:
+    """Élément de décor placé dans le monde. Peut bloquer le joueur si collision=True."""
+
+    def __init__(self, x, y, chemin_image, nom_sprite, collision=False, echelle=1.0):
+        self.nom_sprite = nom_sprite
+        self.collision  = collision
+        self.echelle    = echelle
+
+        if chemin_image not in _cache_images:
+            _cache_images[chemin_image] = pygame.image.load(chemin_image)
+        base = _cache_images[chemin_image]
+
+        if echelle != 1.0:
+            w = max(1, int(base.get_width()  * echelle))
+            h = max(1, int(base.get_height() * echelle))
+            self.image = pygame.transform.scale(base, (w, h))
+        else:
+            self.image = base
+
+        self.rect = pygame.Rect(x, y, self.image.get_width(), self.image.get_height())
+
+    def verifier_collision(self, entite):
+        if self.collision:
+            resoudre_collision(entite, self.rect, mode_mur=False)
+
+    def draw(self, surf, camera):
+        surf.blit(self.image, camera.apply(self.rect))
+
+    def to_dict(self):
+        return {"x": self.rect.x, "y": self.rect.y,
+                "sprite": self.nom_sprite, "collision": self.collision,
+                "echelle": self.echelle}
