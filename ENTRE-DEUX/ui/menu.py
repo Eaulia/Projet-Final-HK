@@ -67,11 +67,17 @@ class Menu:
                        (utilisé pour la pause et le game over — on voit le jeu derrière)
     """
 
-    def __init__(self, options, title="", style="panneau"):
+    def __init__(self, options, title="", style="panneau",
+                 offset_x=0, offset_y=0):
         self.options   = options
         self.title     = title
         self.style     = style
         self.selection = 0
+
+        # Décalage du menu par rapport au centre (en pixels)
+        # offset_x > 0 → décale vers la droite, offset_y > 0 → vers le bas
+        self.offset_x = offset_x
+        self.offset_y = offset_y
 
         self._particules    = []
         self._police_titre  = None
@@ -132,18 +138,21 @@ class Menu:
         for p in self._particules:
             p.draw(surf)
 
+        cx = w // 2 + self.offset_x
+        cy_titre = h // 4 + self.offset_y
+
         # Titre avec effet de glow (ombre décalée + texte principal)
         if self.title:
             ombre = self._police_titre.render(self.title, True, (60, 40, 120))
-            surf.blit(ombre, (w // 2 - ombre.get_width() // 2 + 2, h // 4 + 2))
+            surf.blit(ombre, (cx - ombre.get_width() // 2 + 2, cy_titre + 2))
 
             titre_surf = self._police_titre.render(self.title, True, (210, 190, 255))
-            surf.blit(titre_surf, (w // 2 - titre_surf.get_width() // 2, h // 4))
+            surf.blit(titre_surf, (cx - titre_surf.get_width() // 2, cy_titre))
 
         # Ligne décorative sous le titre
-        lx1 = w // 4
-        lx2 = 3 * w // 4
-        ly  = h // 4 + 68
+        lx1 = cx - w // 4
+        lx2 = cx + w // 4
+        ly  = cy_titre + 68
         pygame.draw.line(surf, (80, 60, 160), (lx1, ly), (lx2, ly), 1)
 
         # Petits losanges aux extrémités de la ligne
@@ -152,7 +161,7 @@ class Menu:
             pygame.draw.polygon(surf, (130, 100, 220), points)
 
         # Options
-        debut_y = h // 2 - 10
+        debut_y = h // 2 - 10 + self.offset_y
         for i, option in enumerate(self.options):
             if i == self.selection:
                 couleur    = (255, 215, 70)     # doré sélectionné
@@ -162,11 +171,11 @@ class Menu:
                 indicateur = " "
 
             opt_surf = self._police_option.render(f" {indicateur}  {option}", True, couleur)
-            surf.blit(opt_surf, (w // 2 - opt_surf.get_width() // 2, debut_y + i * 42))
+            surf.blit(opt_surf, (cx - opt_surf.get_width() // 2, debut_y + i * 42))
 
         # Petite indication en bas
         aide = self._police_sous.render("↑↓ Naviguer   Entrée Valider", True, (70, 60, 110))
-        surf.blit(aide, (w // 2 - aide.get_width() // 2, h - 30))
+        surf.blit(aide, (cx - aide.get_width() // 2, h - 30))
 
     def _dessiner_panneau(self, surf, w, h):
         """
@@ -190,8 +199,8 @@ class Menu:
         panneau_w  = max(300, min(max_opt_w, w - 60))
         panneau_h  = 50 + nb_options * 45 + (80 if self.title else 20)
 
-        px = (w - panneau_w) // 2
-        py = (h - panneau_h) // 2
+        px = (w - panneau_w) // 2 + self.offset_x
+        py = (h - panneau_h) // 2 + self.offset_y
 
         # Fond du panneau
         panneau = pygame.Surface((panneau_w, panneau_h), pygame.SRCALPHA)

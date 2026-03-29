@@ -8,6 +8,7 @@ import datetime
 import pygame
 import settings
 from entities.enemy import Enemy, list_enemy_sprites
+from entities.npc import PNJ, list_pnj_sprites
 from systems.hitbox_config import get_hitbox, set_hitbox
 from settings import *
 from world.tilemap import Platform, Wall, Decor
@@ -17,9 +18,30 @@ LIGHT_TYPES = ["player", "torch", "large", "cool", "dim", "background"]
 
 
 def _lister_decors():
+    """Liste les décors : fichiers à la racine + fichiers dans les sous-dossiers.
+
+    Retourne une liste de chemins relatifs :
+      - "buisson-1.png"         (racine)
+      - "sol/herbe_1.png"       (sous-dossier sol)
+      - "mur/brique_1.png"      (sous-dossier mur)
+
+    Les catégories (sous-dossiers) sont listées en premier, triées.
+    """
     if not os.path.isdir(DECORS_DIR):
-        return []
-    return sorted(f for f in os.listdir(DECORS_DIR) if f.endswith((".png", ".jpg")))
+        return [], []
+    racine  = sorted(f for f in os.listdir(DECORS_DIR)
+                     if f.endswith((".png", ".jpg")) and os.path.isfile(os.path.join(DECORS_DIR, f)))
+    categorisés = []
+    categories  = []
+    for d in sorted(os.listdir(DECORS_DIR)):
+        chemin = os.path.join(DECORS_DIR, d)
+        if not os.path.isdir(chemin) or d.startswith("_") or d == "blocs":
+            continue
+        categories.append(d)
+        for f in sorted(os.listdir(chemin)):
+            if f.endswith((".png", ".jpg")):
+                categorisés.append(f"{d}/{f}")
+    return categorisés + racine, categories
 
 _BASE_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAPS_DIR    = os.path.join(_BASE_DIR, "maps")
@@ -100,14 +122,44 @@ class Editor:
         self.decor_collision     = False
         self.decor_sprite_index  = 0
         self.decor_echelle       = 1.0       # taille du prochain décor placé
-        self._decor_sprites      = _lister_decors()
+        self._decor_sprites, self._decor_categories = _lister_decors()
+        self._decor_cat_index    = -1       # -1 = toutes, sinon index dans _decor_categories
         self._ECHELLES           = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0]
+
+        # PNJs de la carte courante
+        self.pnjs = []
+        self._pnj_sprites      = list_pnj_sprites()
+        self._pnj_sprite_index = 0
+        self._pnj_edit_target  = None          # PNJ en cours d'édition de dialogue
+
+        # Registre PNJ : personnages réutilisables
+        self._pnj_registry     = []   # [{"nom": str, "sprite_name": str}, ...]
+        self._pnj_reg_index    = -1   # -1 = nouveau PNJ, >=0 = index dans le registre
+        self._charger_registre_pnj()
+
+        # Outil remplissage texture (mode décor)
+        self.decor_fill_mode = False  # activé avec F en mode décor
 
         self._nom_carte = ""   # dernier nom de carte sauvegardé / chargé
 
+        # Mode Blocs (auto-tiling)
+        self.bloc_theme = "bleu"       # "bleu" ou "vert"
+        self.bloc_scale = 1            # multiplicateur de taille (1=32px, 2=64px, etc.)
+        self._BLOC_ECHELLES = [1, 2, 3, 4]
+        self._bloc_base_size = 32      # taille de base d'un bloc en pixels
+        self._bloc_shape = 0           # 0=plein, 1=contour, 2=ligne H, 3=ligne V
+        self._BLOC_SHAPES = ["Plein", "Contour", "Ligne H", "Ligne V"]
+        self._bloc_facing = 0          # 0=extérieur, 1=intérieur (contour) / 0=gauche, 1=droite (ligne V)
+        self._BLOC_FACINGS = {
+            0: ["—", "—"],             # plein : pas de choix
+            1: ["Extérieur", "Intérieur"],  # contour
+            2: ["—", "—"],             # ligne H : pas de choix
+            3: ["Mur →", "Mur ←"],    # ligne V : direction du mur
+        }
+
         self.mode = 0
         self._mode_names = ["Plateforme","Mob","Lumiere","Spawn","Portail",
-                            "Mur","Hitbox","Trou","Copier/Coller","Décor"]
+                            "Mur","Hitbox","Trou","Copier/Coller","Décor","PNJ","Blocs"]
 
         self._copy_rect           = None
         self._clipboard_platforms = []
@@ -178,6 +230,54 @@ class Editor:
     @property
     def has_holes(self):
         return len(self.holes) > 0
+
+    # ── Registre PNJ ──────────────────────────────────────────────────────
+
+    def _charger_registre_pnj(self):
+        from systems.save_system import lire_config
+        config = lire_config()
+        self._pnj_registry = config.get("pnj_registry", [])
+
+    def _sauver_registre_pnj(self):
+        from systems.save_system import lire_config, ecrire_config
+        config = lire_config()
+        config["pnj_registry"] = self._pnj_registry
+        ecrire_config(config)
+
+    def _ajouter_au_registre(self, nom, sprite_name):
+        """Ajoute un personnage au registre (ou le met à jour)."""
+        for entry in self._pnj_registry:
+            if entry["nom"] == nom:
+                entry["sprite_name"] = sprite_name
+                self._sauver_registre_pnj()
+                return
+        self._pnj_registry.append({"nom": nom, "sprite_name": sprite_name})
+        self._sauver_registre_pnj()
+
+    def _pnj_reg_courant(self):
+        """Retourne l'entrée du registre sélectionnée, ou None."""
+        if self._pnj_reg_index < 0 or self._pnj_reg_index >= len(self._pnj_registry):
+            return None
+        return self._pnj_registry[self._pnj_reg_index]
+
+    def _pnj_le_plus_proche(self, max_dist=120):
+        """Retourne le PNJ le plus proche du curseur, ou None."""
+        mx, my = pygame.mouse.get_pos()
+        wx = int(mx + self.camera.offset_x)
+        wy = int(my + self.camera.offset_y)
+        best, bd = None, max_dist * max_dist
+        for p in self.pnjs:
+            d = (p.rect.centerx - wx) ** 2 + (p.rect.centery - wy) ** 2
+            if d < bd:
+                bd = d; best = p
+        return best
+
+    def _decor_sprites_filtrés(self):
+        """Retourne les sprites filtrés par la catégorie courante."""
+        if self._decor_cat_index < 0 or not self._decor_categories:
+            return self._decor_sprites
+        cat = self._decor_categories[self._decor_cat_index]
+        return [s for s in self._decor_sprites if s.startswith(f"{cat}/")]
 
     def build_border_segments(self):
         gy = settings.GROUND_Y
@@ -257,6 +357,7 @@ class Editor:
                        for l in self.lighting.lights if not l.get("_enemy_light")],
             "portals":[p.to_dict() for p in self.portals],
             "decors": [d.to_dict() for d in self.decors],
+            "pnjs":   [p.to_dict() for p in self.pnjs],
         }
         self._history.append(state)
         if len(self._history) > self._max_history:
@@ -306,7 +407,7 @@ class Editor:
         self._hb_first_point   = None
 
     def change_mode(self):
-        self.mode              = (self.mode+1) % 10
+        self.mode              = (self.mode+1) % 12
         self.first_point       = None
         self.light_first_point = None
         self._hb_first_point   = None
@@ -361,10 +462,18 @@ class Editor:
             return f"set_start:{self._nom_carte}"
         elif key == pygame.K_k:
             self._show_msg("[K] Sauvegardez d'abord la carte avec [S]")
-        elif key == pygame.K_b:
+        elif key == pygame.K_b and (mods & pygame.KMOD_CTRL):
             self.spawn_x=self.spawn_y=100
             self.player.spawn_x=self.player.spawn_y=100
             self.player.respawn()
+            self._show_msg("Spawn réinitialisé à (100, 100)")
+        elif key == pygame.K_F5:
+            self.camera.free_mode = not self.camera.free_mode
+            if self.camera.free_mode:
+                self._show_msg("Caméra libre — Molette=déplacer  Clic molette=glisser  [F5]=retour")
+            else:
+                self.camera.stop_drag()
+                self._show_msg("Caméra : suivi du joueur")
 
         elif key in (pygame.K_UP, pygame.K_DOWN, pygame.K_HOME, pygame.K_END,
                      pygame.K_LEFT, pygame.K_RIGHT):
@@ -448,20 +557,109 @@ class Editor:
                 self._do_paste(int(mx+self.camera.offset_x),int(my+self.camera.offset_y))
 
         elif key==pygame.K_t and self.mode==9:
-            if self._decor_sprites:
-                self.decor_sprite_index=(self.decor_sprite_index+1)%len(self._decor_sprites)
+            sprites = self._decor_sprites_filtrés()
+            if sprites:
+                self.decor_sprite_index=(self.decor_sprite_index+1)%len(sprites)
+        elif key==pygame.K_g and self.mode==9:
+            # Changer de catégorie de décor
+            self._decor_sprites, self._decor_categories = _lister_decors()
+            if self._decor_categories:
+                self._decor_cat_index=(self._decor_cat_index+1)
+                if self._decor_cat_index >= len(self._decor_categories):
+                    self._decor_cat_index = -1  # retour à "toutes"
+                self.decor_sprite_index = 0
+                cat = self._decor_categories[self._decor_cat_index] if self._decor_cat_index >= 0 else "TOUTES"
+                self._show_msg(f"Catégorie : {cat} ({len(self._decor_sprites_filtrés())} décors)")
         elif key==pygame.K_c and self.mode==9:
             self.decor_collision=not self.decor_collision
             etat="AVEC collision" if self.decor_collision else "sans collision"
             self._show_msg(f"Décor : {etat}")
+        elif key==pygame.K_f and self.mode==9:
+            self.decor_fill_mode=not self.decor_fill_mode
+            etat="REMPLISSAGE activé" if self.decor_fill_mode else "placement normal"
+            self._show_msg(f"Décor : {etat}")
+        elif key==pygame.K_y and self.mode==9:
+            # Activer le mode édition de hitbox décor
+            self._decor_hb_mode = not getattr(self, '_decor_hb_mode', False)
+            self._decor_hb_target = None
+            self._decor_hb_first = None
+            if self._decor_hb_mode:
+                self._show_msg("Hitbox décor : clic sur un décor puis 2 clics pour la zone")
+            else:
+                self._show_msg("Hitbox décor : désactivé")
+        elif key==pygame.K_x and self.mode==9:
+            # Reset hitbox du décor sous le curseur à image entière
+            mx,my=pygame.mouse.get_pos()
+            wx=int(mx+self.camera.offset_x); wy=int(my+self.camera.offset_y)
+            pt=pygame.Rect(wx,wy,1,1)
+            for d in reversed(self.decors):
+                if d.rect.colliderect(pt):
+                    d.collision_box=None
+                    self._show_msg(f"Hitbox réinitialisée (image entière)")
+                    break
+
+        # Mode PNJ (10)
+        elif key==pygame.K_t and self.mode==10:
+            # Naviguer dans le registre PNJ : -1=nouveau, puis les personnages enregistrés
+            self._charger_registre_pnj()
+            if self._pnj_registry:
+                self._pnj_reg_index = (self._pnj_reg_index + 1)
+                if self._pnj_reg_index >= len(self._pnj_registry):
+                    self._pnj_reg_index = -1
+                reg = self._pnj_reg_courant()
+                if reg:
+                    self._show_msg(f"PNJ : {reg['nom']} ({reg.get('sprite_name','—')})")
+                else:
+                    self._show_msg("PNJ : + Nouveau personnage")
+            else:
+                self._show_msg("Registre vide — placez un PNJ pour créer un personnage")
+        elif key==pygame.K_g and self.mode==10:
+            # Changer le sprite (quand on crée un nouveau PNJ)
+            self._pnj_sprites = list_pnj_sprites()
+            if self._pnj_sprites:
+                self._pnj_sprite_index=(self._pnj_sprite_index+1)%len(self._pnj_sprites)
+                self._show_msg(f"Sprite : {self._pnj_sprites[self._pnj_sprite_index]}")
+            else:
+                self._show_msg("Aucun sprite dans assets/images/pnj/")
+        elif key==pygame.K_d and self.mode==10:
+            # Ajouter un dialogue au PNJ le plus proche du curseur
+            pnj = self._pnj_le_plus_proche()
+            if pnj:
+                self._pnj_edit_target=pnj
+                self._ask_text("pnj_dialogue",f"Dialogue pour {pnj.nom} (ligne1|ligne2|...) :")
+                return "text_input"
+            else:
+                self._show_msg("Aucun PNJ proche")
+        elif key==pygame.K_w and self.mode==10:
+            # Changer le mode de répétition du dialogue du PNJ proche
+            pnj = self._pnj_le_plus_proche()
+            if pnj:
+                modes = ["boucle_dernier", "restart"]
+                idx = modes.index(pnj.dialogue_mode) if pnj.dialogue_mode in modes else 0
+                pnj.dialogue_mode = modes[(idx + 1) % len(modes)]
+                labels = {"boucle_dernier": "Boucle dernière phrase", "restart": "Recommence tout"}
+                self._show_msg(f"{pnj.nom} : {labels[pnj.dialogue_mode]}")
+
+        # Mode Blocs (11)
+        elif key==pygame.K_t and self.mode==11:
+            self.bloc_theme = "vert" if self.bloc_theme == "bleu" else "bleu"
+            self._show_msg(f"Thème : {self.bloc_theme}")
+        elif key==pygame.K_f and self.mode==11:
+            self._bloc_shape = (self._bloc_shape + 1) % len(self._BLOC_SHAPES)
+            self._bloc_facing = 0  # reset le sens quand on change de forme
+            self._show_msg(f"Forme : {self._BLOC_SHAPES[self._bloc_shape]}")
+        elif key==pygame.K_v and self.mode==11:
+            self._bloc_facing = 1 - self._bloc_facing
+            label = self._BLOC_FACINGS[self._bloc_shape][self._bloc_facing]
+            self._show_msg(f"Sens : {label}")
 
         return None
 
     def _new_map(self, bg_color=None):
-        self._snapshot()
+        self._history.clear()
         self.platforms.clear(); self.enemies.clear()
         self.lighting.lights.clear(); self.portals.clear(); self.custom_walls.clear()
-        self.decors.clear()
+        self.decors.clear(); self.pnjs.clear()
         self._has_clipboard=False
         self._restore_confirm=False; self._restore_confirm_timer=0.0
         settings.GROUND_Y=590; settings.CEILING_Y=0; settings.SCENE_WIDTH=2400
@@ -484,6 +682,27 @@ class Editor:
                 color=_parse_color(name) if name else None
                 self._new_map(bg_color=color or tuple(VIOLET))
                 return "done"
+            if mode=="pnj_nom":
+                # Renommer le PNJ ciblé et l'enregistrer dans le registre
+                if self._pnj_edit_target:
+                    if name:
+                        self._pnj_edit_target.nom = name
+                    # Enregistrer dans le registre
+                    self._ajouter_au_registre(
+                        self._pnj_edit_target.nom,
+                        self._pnj_edit_target.sprite_name)
+                    self._show_msg(f"PNJ enregistré : {self._pnj_edit_target.nom}")
+                self._pnj_edit_target=None
+                return "done"
+            if mode=="pnj_dialogue":
+                if self._pnj_edit_target and name:
+                    # Format: ligne1|ligne2|ligne3 → une conversation
+                    lignes = [(l.strip(), self._pnj_edit_target.nom) for l in name.split("|") if l.strip()]
+                    if lignes:
+                        self._pnj_edit_target._dialogues.append(lignes)
+                        self._show_msg(f"Dialogue ajouté ({len(lignes)} lignes)")
+                self._pnj_edit_target=None
+                return "done"
             if not name: return "done"
             if   mode=="save":  self.save(name)
             elif mode=="load":  self.load(name)
@@ -501,11 +720,18 @@ class Editor:
         elif key==pygame.K_BACKSPACE:
             self._text_input=self._text_input[:-1]
         else:
-            char=pygame.key.name(key)
-            if len(char)==1 and (char.isalnum() or char in ",.#"): self._text_input+=char
-            elif char=="space": self._text_input+="_"
-            elif char=="-":     self._text_input+="-"
+            # Pour PNJ, la saisie passe par TEXTINPUT (handle_textinput)
+            if self._text_mode not in ("pnj_nom", "pnj_dialogue"):
+                char=pygame.key.name(key)
+                if len(char)==1 and (char.isalnum() or char in ",.#"): self._text_input+=char
+                elif char=="space": self._text_input+="_"
+                elif char=="-":     self._text_input+="-"
         return "typing"
+
+    def handle_textinput(self, text):
+        """Appelé depuis game.py sur les événements TEXTINPUT pour une saisie riche."""
+        if self._text_mode in ("pnj_nom", "pnj_dialogue"):
+            self._text_input += text
 
     def _list_maps(self):
         if not os.path.isdir(MAPS_DIR): return []
@@ -520,6 +746,12 @@ class Editor:
             idx = self._ECHELLES.index(self.decor_echelle) if self.decor_echelle in self._ECHELLES else 3
             idx = max(0, min(len(self._ECHELLES)-1, idx+direction))
             self.decor_echelle=self._ECHELLES[idx]
+        elif self.mode==11:
+            # Molette = changer la taille des blocs
+            idx = self._BLOC_ECHELLES.index(self.bloc_scale) if self.bloc_scale in self._BLOC_ECHELLES else 0
+            idx = max(0, min(len(self._BLOC_ECHELLES)-1, idx+direction))
+            self.bloc_scale=self._BLOC_ECHELLES[idx]
+            self._show_msg(f"Taille bloc : {self._bloc_base_size * self.bloc_scale}px (x{self.bloc_scale})")
 
     def toggle_decor_collision_at(self, wx, wy):
         """Clic milieu en mode 9 : bascule la collision du décor sous le curseur."""
@@ -547,6 +779,8 @@ class Editor:
             if self._has_clipboard: self._do_paste(wx,wy)
             else: self._click_rect(wx,wy,"copy_select")
         elif self.mode==9: self._click_decor(wx,wy)
+        elif self.mode==10: self._click_pnj(wx,wy)
+        elif self.mode==11: self._click_bloc(wx,wy)
 
     def _click_rect(self, wx, wy, kind):
         if self.first_point is None:
@@ -647,14 +881,238 @@ class Editor:
             self.custom_walls.append(Wall(wx+rel.x,wy+rel.y,rel.w,rel.h,visible=True))
 
     def _click_decor(self, wx, wy):
-        if not self._decor_sprites: self._show_msg("Aucun décor dans assets/images/decor/"); return
-        nom = self._decor_sprites[self.decor_sprite_index % len(self._decor_sprites)]
+        # Mode édition hitbox décor
+        if getattr(self, '_decor_hb_mode', False):
+            self._click_decor_hitbox(wx, wy)
+            return
+        # Mode remplissage
+        if self.decor_fill_mode:
+            self._click_decor_fill(wx, wy)
+            return
+        sprites = self._decor_sprites_filtrés()
+        if not sprites: self._show_msg("Aucun décor dans assets/images/decor/"); return
+        nom = sprites[self.decor_sprite_index % len(sprites)]
         chemin = os.path.join(DECORS_DIR, nom)
         if not os.path.exists(chemin): return
         self._snapshot()
         self.decors.append(Decor(wx, wy, chemin, nom,
                                  collision=self.decor_collision,
                                  echelle=self.decor_echelle))
+
+    def _click_decor_fill(self, wx, wy):
+        """Remplissage : 2 clics définissent une zone, la texture est répétée pour la couvrir.
+
+        Si une catégorie est sélectionnée, les variantes de la catégorie sont
+        utilisées aléatoirement pour un rendu naturel.
+        """
+        import random as _rnd
+        sprites = self._decor_sprites_filtrés()
+        if not sprites:
+            self._show_msg("Aucun décor disponible"); return
+        if self.first_point is None:
+            self.first_point = (wx, wy)
+            self._show_msg("Remplissage : clic pour le coin opposé")
+        else:
+            x1, y1 = self.first_point
+            self.first_point = None
+            x, y = min(x1, wx), min(y1, wy)
+            rw, rh = abs(wx - x1), abs(wy - y1)
+            if rw < 5 or rh < 5: return
+
+            # Déterminer la taille d'une tuile (basée sur le sprite courant)
+            nom_ref = sprites[self.decor_sprite_index % len(sprites)]
+            chemin_ref = os.path.join(DECORS_DIR, nom_ref)
+            if not os.path.exists(chemin_ref): return
+            base = pygame.image.load(chemin_ref)
+            tw = max(1, int(base.get_width() * self.decor_echelle))
+            th = max(1, int(base.get_height() * self.decor_echelle))
+
+            # Pré-valider tous les chemins des variantes
+            variantes = []
+            for s in sprites:
+                ch = os.path.join(DECORS_DIR, s)
+                if os.path.exists(ch):
+                    variantes.append((s, ch))
+            if not variantes: return
+
+            self._snapshot()
+            count = 0
+            cy = y
+            while cy < y + rh:
+                cx = x
+                while cx < x + rw:
+                    # Choisir une variante aléatoire si plusieurs disponibles
+                    nom, chemin = _rnd.choice(variantes)
+                    self.decors.append(Decor(cx, cy, chemin, nom,
+                                             collision=self.decor_collision,
+                                             echelle=self.decor_echelle))
+                    count += 1
+                    cx += tw
+                cy += th
+            nb_var = len(variantes)
+            self._show_msg(f"Remplissage : {count} décors ({nb_var} variante{'s' if nb_var>1 else ''}) sur {rw}x{rh}")
+
+    def _click_decor_hitbox(self, wx, wy):
+        """Sélectionner un décor puis 2 clics pour définir sa hitbox."""
+        if self._decor_hb_target is None:
+            pt = pygame.Rect(wx, wy, 1, 1)
+            for d in reversed(self.decors):
+                if d.rect.colliderect(pt):
+                    self._decor_hb_target = d
+                    self._decor_hb_first = None
+                    self._show_msg(f"Décor sélectionné — clic x2 pour la hitbox")
+                    return
+            self._show_msg("Aucun décor sous le curseur")
+        elif self._decor_hb_first is None:
+            self._decor_hb_first = (wx, wy)
+        else:
+            x1, y1 = self._decor_hb_first
+            x, y = min(x1, wx), min(y1, wy)
+            w, h = abs(wx - x1), abs(wy - y1)
+            if w > 2 and h > 2:
+                d = self._decor_hb_target
+                ox = x - d.rect.x
+                oy = y - d.rect.y
+                d.collision_box = (ox, oy, w, h)
+                d.collision = True
+                self._show_msg(f"Hitbox: {w}x{h} offset({ox},{oy})")
+            self._decor_hb_target = None
+            self._decor_hb_first = None
+            self._decor_hb_mode = False
+
+    def _click_pnj(self, wx, wy):
+        self._snapshot()
+        reg = self._pnj_reg_courant()
+        if reg:
+            # Placer un personnage existant du registre
+            self.pnjs.append(PNJ(wx, wy, reg["nom"], [],
+                                  sprite_name=reg.get("sprite_name")))
+            self._show_msg(f"PNJ placé : {reg['nom']}")
+        else:
+            # Nouveau personnage → demander le nom puis l'enregistrer
+            nom = f"PNJ_{len(self.pnjs)+1}"
+            sprite = None
+            if self._pnj_sprites:
+                sprite = self._pnj_sprites[self._pnj_sprite_index % len(self._pnj_sprites)]
+            self.pnjs.append(PNJ(wx, wy, nom, [], sprite_name=sprite))
+            self._pnj_edit_target = self.pnjs[-1]
+            self._ask_text("pnj_nom", f"Nom du PNJ (défaut: {nom}) :")
+
+    def _click_bloc(self, wx, wy):
+        """Auto-tiling : 2 clics définissent une zone, remplie selon la forme choisie."""
+        import random as _rnd
+        cell = self._bloc_base_size * self.bloc_scale
+        shape = self._bloc_shape  # 0=plein, 1=contour, 2=ligne H, 3=ligne V
+
+        if self.first_point is None:
+            self.first_point = ((wx // cell) * cell, (wy // cell) * cell)
+            if shape in (2, 3):
+                self._show_msg("Blocs : clic pour la fin de la ligne")
+            else:
+                self._show_msg("Blocs : clic pour le coin opposé")
+            return
+
+        x1, y1 = self.first_point
+        self.first_point = None
+
+        # Snap le 2e point
+        x2 = (wx // cell) * cell
+        y2 = (wy // cell) * cell
+        x = min(x1, x2)
+        y = min(y1, y2)
+        rw = abs(x2 - x1) + cell
+        rh = abs(y2 - y1) + cell
+
+        cols = max(1, rw // cell)
+        rows = max(1, rh // cell)
+
+        # Pour les lignes, forcer 1 rangée/colonne
+        if shape == 2:  # Ligne H
+            rows = 1
+            rh = cell
+        elif shape == 3:  # Ligne V
+            cols = 1
+            rw = cell
+
+        theme = self.bloc_theme
+        self._snapshot()
+        count = 0
+
+        for row in range(rows):
+            for col in range(cols):
+                # En mode contour, sauter l'intérieur
+                if shape == 1:
+                    is_border = (row == 0 or row == rows-1 or
+                                 col == 0 or col == cols-1)
+                    if not is_border:
+                        continue
+
+                tile_name = self._get_auto_tile(row, col, rows, cols, theme,
+                                                _rnd, shape, self._bloc_facing)
+                chemin = os.path.join(DECORS_DIR, "blocs", tile_name)
+                if not os.path.exists(chemin):
+                    continue
+                bx = x + col * cell
+                by = y + row * cell
+                self.decors.append(Decor(bx, by, chemin, f"blocs/{tile_name}",
+                                         collision=True,
+                                         echelle=self.bloc_scale))
+                count += 1
+
+        shape_name = self._BLOC_SHAPES[shape]
+        self._show_msg(f"Blocs : {count} tuiles ({cols}x{rows}) {shape_name} — {theme}")
+
+    def _get_auto_tile(self, row, col, rows, cols, theme, rnd, shape=0, facing=0):
+        """Retourne le nom de fichier de la tuile selon la position dans la grille.
+
+        shape:  0=plein, 1=contour, 2=ligne H, 3=ligne V
+        facing: 0=extérieur/mur→, 1=intérieur/mur←
+        """
+        is_top    = (row == 0)
+        is_bottom = (row == rows - 1)
+        is_left   = (col == 0)
+        is_right  = (col == cols - 1)
+
+        # ── Ligne V : un seul mur dans la direction choisie ──
+        if shape == 3:
+            if facing == 0:  # Mur →  (côté droit visible)
+                return f"mur_D_{theme}_{rnd.randint(1,3)}.png"
+            else:            # Mur ←  (côté gauche visible)
+                return f"mur_G_{theme}_{rnd.randint(1,3)}.png"
+
+        # ── Mode Contour intérieur : murs inversés + coins intérieurs ──
+        if shape == 1 and facing == 1:
+            # Coins : utiliser les coins intérieurs (le creux est vers l'extérieur)
+            if is_top and is_left:     return f"coin_interieur_D_B_{theme}.png"
+            if is_top and is_right:    return f"coin_interieur_G_B_{theme}.png"
+            if is_bottom and is_left:  return f"coin_interieur_D_H_{theme}.png"
+            if is_bottom and is_right: return f"coin_interieur_G_H_{theme}.png"
+            # Bords inversés (murs regardent vers l'intérieur)
+            if is_top:    return f"plaf_{theme}_{rnd.randint(1,3)}.png"
+            if is_bottom: return f"sol_{theme}_{rnd.randint(1,3)}.png"
+            if is_left:   return f"mur_G_{theme}_{rnd.randint(1,3)}.png"
+            if is_right:  return f"mur_D_{theme}_{rnd.randint(1,3)}.png"
+
+        # ── Coins extérieurs ──
+        if is_top and is_left:     return f"coin_G_H_{theme}.png"
+        if is_top and is_right:    return f"coin_D_H_{theme}.png"
+        if is_bottom and is_left:  return f"coin_G_B_{theme}.png"
+        if is_bottom and is_right: return f"coin_D_B_{theme}.png"
+
+        # ── Bords (murs corrigés : bord gauche = mur_D, bord droit = mur_G) ──
+        if is_top:    return f"sol_{theme}_{rnd.randint(1,3)}.png"
+        if is_bottom: return f"plaf_{theme}_{rnd.randint(1,3)}.png"
+        if is_left:   return f"mur_D_{theme}_{rnd.randint(1,3)}.png"
+        if is_right:  return f"mur_G_{theme}_{rnd.randint(1,3)}.png"
+
+        # ── Intérieur avec raretés ──
+        r = rnd.random()
+        if r < 0.08:    # ~8% → fossile
+            return f"interieur_fossile_{theme}_{rnd.randint(1,3)}.png"
+        elif r < 0.38:  # ~30% → os
+            return f"interieur_os_{theme}_{rnd.randint(1,3)}.png"
+        else:           # ~62% → normal
+            return f"interieur_{theme}_{rnd.randint(1,3)}.png"
 
     def _click_hitbox(self, wx, wy):
         if not self._enemy_sprites: return
@@ -696,6 +1154,8 @@ class Editor:
         elif self.mode==5: self.custom_walls[:]=[w for w in self.custom_walls if not w.rect.colliderect(pt)]
         elif self.mode==8: self._copy_rect=None; self._has_clipboard=False; self.first_point=None
         elif self.mode==9: self.decors[:]      =[d for d in self.decors       if not d.rect.colliderect(pt)]
+        elif self.mode==10: self.pnjs[:]      =[p for p in self.pnjs        if not p.rect.colliderect(pt)]
+        elif self.mode==11: self.decors[:]    =[d for d in self.decors       if not d.rect.colliderect(pt)]
 
     def draw_preview(self, surf, mouse_pos):
         if self.mode in(0,4,5,7,8):
@@ -735,6 +1195,8 @@ class Editor:
         elif self.mode==6: self._draw_hitbox_editor(surf,mouse_pos)
         if self.mode==8:   self._draw_copy_paste_preview(surf,mouse_pos)
         if self.mode==9:   self._draw_decor_preview(surf,mouse_pos)
+        if self.mode==10:  self._draw_pnj_preview(surf,mouse_pos)
+        if self.mode==11:  self._draw_bloc_preview(surf,mouse_pos)
 
     def _draw_hitbox_editor(self, surf, mouse_pos):
         font=self._get_font()
@@ -789,8 +1251,9 @@ class Editor:
 
     def _draw_decor_preview(self, surf, mouse_pos):
         font = self._get_font()
-        if not self._decor_sprites: return
-        nom = self._decor_sprites[self.decor_sprite_index % len(self._decor_sprites)]
+        sprites = self._decor_sprites_filtrés()
+        if not sprites: return
+        nom = sprites[self.decor_sprite_index % len(sprites)]
         chemin = os.path.join(DECORS_DIR, nom)
         try:
             img = pygame.image.load(chemin)
@@ -801,11 +1264,159 @@ class Editor:
             h = max(1, int(img.get_height() * self.decor_echelle))
             img = pygame.transform.scale(img, (w, h))
 
+        # Mode hitbox : montre le décor sélectionné
+        if getattr(self, '_decor_hb_mode', False):
+            coul = (255, 0, 0)
+            if self._decor_hb_target:
+                dr = self.camera.apply(self._decor_hb_target.rect)
+                pygame.draw.rect(surf, (255, 255, 0), dr, 2)
+                if self._decor_hb_first:
+                    fx = int(self._decor_hb_first[0] - self.camera.offset_x)
+                    fy = int(self._decor_hb_first[1] - self.camera.offset_y)
+                    rw, rh = abs(mouse_pos[0] - fx), abs(mouse_pos[1] - fy)
+                    rx, ry = min(fx, mouse_pos[0]), min(fy, mouse_pos[1])
+                    pygame.draw.rect(surf, (255, 0, 0), (rx, ry, rw, rh), 2)
+            surf.blit(font.render("[Y] Hitbox mode — clic=sélectionner décor puis 2 clics",
+                                  True, coul), (10, surf.get_height() - 50))
+            return
+
+        # Mode remplissage : rectangle de preview
+        if self.decor_fill_mode and self.first_point:
+            wx = int(mouse_pos[0] + self.camera.offset_x)
+            wy = int(mouse_pos[1] + self.camera.offset_y)
+            x1, y1 = self.first_point
+            x, y = min(x1, wx), min(y1, wy)
+            rw_f, rh_f = abs(wx - x1), abs(wy - y1)
+            sx = int(x - self.camera.offset_x)
+            sy = int(y - self.camera.offset_y)
+            pygame.draw.rect(surf, (0, 255, 200), (sx, sy, rw_f, rh_f), 2)
+            # Montrer la grille de tuiles
+            tw, th = img.get_width(), img.get_height()
+            count = 0
+            cy = sy
+            while cy < sy + rh_f:
+                cx = sx
+                while cx < sx + rw_f:
+                    s = img.copy(); s.set_alpha(60)
+                    surf.blit(s, (cx, cy))
+                    count += 1
+                    cx += tw
+                cy += th
+            surf.blit(font.render(f"REMPLISSAGE : {count} tuiles", True, (0, 255, 200)),
+                       (sx, sy - 18))
+            return
+
         s = img.copy(); s.set_alpha(140)
         surf.blit(s, (mouse_pos[0], mouse_pos[1]))
         coul = (255, 100, 0) if self.decor_collision else (0, 220, 100)
+        fill_txt = "  [F]REMPLISSAGE" if self.decor_fill_mode else ""
         surf.blit(font.render(
-            f"[T] {nom}  x{self.decor_echelle}  [C] collision:{self.decor_collision}",
+            f"[T] {nom}  x{self.decor_echelle}  [C] collision:{self.decor_collision}{fill_txt}",
+            True, coul), (mouse_pos[0] + 4, mouse_pos[1] - 18))
+
+    def _draw_pnj_preview(self, surf, mouse_pos):
+        font = self._get_font()
+        from entities.npc import PNJ_DIR
+
+        # Déterminer le sprite à afficher
+        reg = self._pnj_reg_courant()
+        sprite_nom = None
+        label = ""
+        if reg:
+            sprite_nom = reg.get("sprite_name")
+            label = reg["nom"]
+        elif self._pnj_sprites:
+            sprite_nom = self._pnj_sprites[self._pnj_sprite_index % len(self._pnj_sprites)]
+            label = f"+ Nouveau"
+
+        # Charger et afficher le sprite
+        img = None
+        if sprite_nom:
+            chemin = os.path.join(PNJ_DIR, sprite_nom)
+            try:
+                if os.path.isdir(chemin):
+                    frames = sorted(g for g in os.listdir(chemin) if g.endswith((".png",".jpg")))
+                    img = pygame.image.load(os.path.join(chemin, frames[0])) if frames else None
+                else:
+                    img = pygame.image.load(chemin)
+            except Exception:
+                pass
+
+        if img:
+            s = img.copy(); s.set_alpha(140)
+            surf.blit(s, mouse_pos)
+        else:
+            r = pygame.Rect(mouse_pos[0], mouse_pos[1], 34, 54)
+            s = pygame.Surface((34, 54), pygame.SRCALPHA)
+            s.fill((180, 160, 230, 120))
+            surf.blit(s, r)
+            pygame.draw.rect(surf, (255, 255, 255), r, 1)
+
+        surf.blit(font.render(label, True, (190, 175, 240)),
+                   (mouse_pos[0] + 4, mouse_pos[1] - 18))
+
+    def _draw_bloc_preview(self, surf, mouse_pos):
+        font = self._get_font()
+        cell = self._bloc_base_size * self.bloc_scale
+
+        if self.first_point:
+            wx = int(mouse_pos[0] + self.camera.offset_x)
+            wy = int(mouse_pos[1] + self.camera.offset_y)
+            x1, y1 = self.first_point
+            # Snap
+            x2 = (wx // cell) * cell
+            y2 = (wy // cell) * cell
+            x = min(x1, x2)
+            y = min(y1, y2)
+            rw = abs(x2 - x1) + cell
+            rh = abs(y2 - y1) + cell
+            cols = max(1, rw // cell)
+            rows = max(1, rh // cell)
+
+            sx = int(x - self.camera.offset_x)
+            sy = int(y - self.camera.offset_y)
+            shape = self._bloc_shape
+
+            # Ajuster pour lignes
+            draw_cols, draw_rows = cols, rows
+            draw_rw, draw_rh = rw, rh
+            if shape == 2:  # Ligne H
+                draw_rows = 1; draw_rh = cell
+            elif shape == 3:  # Ligne V
+                draw_cols = 1; draw_rw = cell
+
+            # Rectangle de preview
+            pygame.draw.rect(surf, (0, 200, 255), (sx, sy, draw_rw, draw_rh), 2)
+
+            # Grille — montrer les cellules qui seront remplies
+            for r in range(draw_rows):
+                for c in range(draw_cols):
+                    cx = sx + c * cell
+                    cy = sy + r * cell
+                    if shape == 1:  # Contour
+                        is_border = (r == 0 or r == draw_rows-1 or
+                                     c == 0 or c == draw_cols-1)
+                        if is_border:
+                            pygame.draw.rect(surf, (0, 200, 255), (cx, cy, cell, cell), 1)
+                        # Intérieur vide = pas de dessin
+                    else:
+                        pygame.draw.rect(surf, (0, 200, 255), (cx, cy, cell, cell), 1)
+
+            surf.blit(font.render(f"{draw_cols}x{draw_rows} {self._BLOC_SHAPES[shape]}",
+                       True, (0, 200, 255)), (sx, sy - 18))
+        else:
+            # Preview : un carré au curseur
+            cell_s = cell
+            pygame.draw.rect(surf, (0, 200, 255),
+                             (mouse_pos[0], mouse_pos[1], cell_s, cell_s), 2)
+
+        # Thème, taille, forme et sens
+        coul = (100, 160, 255) if self.bloc_theme == "bleu" else (100, 220, 100)
+        shape_name = self._BLOC_SHAPES[self._bloc_shape]
+        facing_label = self._BLOC_FACINGS[self._bloc_shape][self._bloc_facing]
+        facing_txt = f"  {facing_label}" if facing_label != "—" else ""
+        surf.blit(font.render(
+            f"{self.bloc_theme}  {self._bloc_base_size * self.bloc_scale}px  {shape_name}{facing_txt}",
             True, coul), (mouse_pos[0] + 4, mouse_pos[1] - 18))
 
     def draw_overlays(self, surf):
@@ -833,7 +1444,7 @@ class Editor:
         phase_color=(255,120,40) if self.has_holes else (0,255,120)
         phase_label="PHASE 2 — trous" if self.has_holes else "PHASE 1 — structure"
         surf.blit(font.render(
-            f"EDITEUR [{self.mode+1}/9] {self._mode_names[self.mode]}"
+            f"EDITEUR [{self.mode+1}/{len(self._mode_names)}] {self._mode_names[self.mode]}"
             f"{'  [Hitbox]' if self.show_hitboxes else ''}  |  {phase_label}",
             True,phase_color),(10,6))
 
@@ -880,7 +1491,7 @@ class Editor:
                 f"[T]{LIGHT_TYPES[self.light_type_index]} [F]{'ON' if self.light_flicker else 'OFF'} Spd:{self.light_flicker_speed}",
                 True,(255,200,100)),(10,y2))
         elif self.mode==3:
-            surf.blit(font.render(f"Clic=spawn [R]espawn [B]ase ({self.spawn_x},{self.spawn_y})",
+            surf.blit(font.render(f"Clic=spawn [R]espawn [Ctrl+B]reset ({self.spawn_x},{self.spawn_y})",
                 True,(100,200,255)),(10,y2))
         elif self.mode==4:
             surf.blit(font.render(f"Clic G x2=portail | Clic D=suppr | {len(self.portals)}",
@@ -907,17 +1518,48 @@ class Editor:
                 nb=len(self._clipboard_platforms)+len(self._clipboard_walls)
                 surf.blit(font.render(f"Clipboard:{nb} | Clic=coller | Clic D=effacer",True,(255,200,0)),(10,y2))
         elif self.mode==9:
-            nom=self._decor_sprites[self.decor_sprite_index%len(self._decor_sprites)] if self._decor_sprites else "—"
+            _spr=self._decor_sprites_filtrés()
+            nom=_spr[self.decor_sprite_index%len(_spr)] if _spr else "—"
             cc=(255,100,0) if self.decor_collision else (0,220,100)
+            fill_txt=" [F]REMPLISSAGE" if self.decor_fill_mode else ""
+            cat_txt=self._decor_categories[self._decor_cat_index] if self._decor_cat_index>=0 and self._decor_categories else "TOUTES"
             surf.blit(font.render(
-                f"[T]:{nom}  [C]collision:{self.decor_collision}  Molette:x{self.decor_echelle}"
-                f"  Clic=placer  Clic D=suppr  Clic M=toggle collision",
+                f"[G]:{cat_txt}  [T]:{nom}  [C]coll:{self.decor_collision}  x{self.decor_echelle}"
+                f"  [Y]hitbox  [X]reset{fill_txt}",
                 True,cc),(10,y2))
+        elif self.mode==10:
+            reg = self._pnj_reg_courant()
+            if reg:
+                perso = reg["nom"]
+            elif self._pnj_sprites:
+                perso = f"+ Nouveau ({self._pnj_sprites[self._pnj_sprite_index % len(self._pnj_sprites)]})"
+            else:
+                perso = "+ Nouveau (pas de sprite)"
+            surf.blit(font.render(
+                f"[T]:{perso}  [G]sprite  [D]dialogue  [W]mode  ({len(self.pnjs)} PNJ)",
+                True,(190,175,240)),(10,y2))
+        elif self.mode==11:
+            coul = (100, 160, 255) if self.bloc_theme == "bleu" else (100, 220, 100)
+            px = self._bloc_base_size * self.bloc_scale
+            shape_name = self._BLOC_SHAPES[self._bloc_shape]
+            facing_label = self._BLOC_FACINGS[self._bloc_shape][self._bloc_facing]
+            facing_txt = f"  [V]:{facing_label}" if facing_label != "—" else ""
+            surf.blit(font.render(
+                f"[T]hème:{self.bloc_theme}  [F]orme:{shape_name}{facing_txt}  {px}px  "
+                f"Clic x2  Clic D=suppr  Molette=taille",
+                True, coul),(10,y2))
 
         carte_info = f" | carte: {self._nom_carte}" if self._nom_carte else ""
+        cam_info = "  [F5]CAM LIBRE" if not self.camera.free_mode else ""
         surf.blit(small.render(
-            f"[M]ode [H]itbox [N]ew [S]ave [L]oad [K]carte_debut [R]respawn [Ctrl+Z]annuler [Ctrl+R]restaurer{carte_info}",
+            f"[M]ode [H]itbox [N]ew [S]ave [L]oad [K]carte_debut [R]espawn [Ctrl+B]reset [Ctrl+Z]annuler [Ctrl+R]restaurer{cam_info}{carte_info}",
             True,(140,140,140)),(10,70))
+
+        # Indicateur caméra libre
+        if self.camera.free_mode:
+            cam_txt = "CAM LIBRE — Molette↕ Clic molette=glisser [F5]=retour"
+            cam_surf = font.render(cam_txt, True, (255, 200, 50))
+            surf.blit(cam_surf, (w - cam_surf.get_width() - 10, 70))
 
         if self._hud_msg and self._hud_msg_timer > 0:
             if self._restore_confirm:
@@ -971,6 +1613,7 @@ class Editor:
                        for l in self.lighting.lights if not l.get("_enemy_light")],
             "portals":[p.to_dict() for p in self.portals],
             "decors": [d.to_dict() for d in self.decors],
+            "pnjs":   [p.to_dict() for p in self.pnjs],
         }
 
     def save(self, name="map"):
@@ -983,7 +1626,8 @@ class Editor:
         fp=os.path.join(MAPS_DIR,f"{name}.json")
         try:
             with open(fp) as f: data=json.load(f)
-            self._snapshot(); self._apply_state(data)
+            self._history.clear()
+            self._apply_state(data)
             self._nom_carte=name
             self._show_msg(f"Chargé : {name}.json  |  [K]=définir comme carte de départ")
         except FileNotFoundError: self._show_msg(f"{name}.json introuvable")
@@ -1060,9 +1704,15 @@ class Editor:
         for d in data.get("decors",[]):
             chemin = os.path.join(DECORS_DIR, d["sprite"])
             if os.path.exists(chemin):
+                cb = tuple(d["collision_box"]) if "collision_box" in d else None
                 self.decors.append(Decor(d["x"],d["y"],chemin,d["sprite"],
                                          d.get("collision",False),
-                                         d.get("echelle",1.0)))
+                                         d.get("echelle",1.0),
+                                         collision_box=cb))
+
+        self.pnjs.clear()
+        for p in data.get("pnjs",[]):
+            self.pnjs.append(PNJ.from_dict(p))
 
         self._restore_confirm       = False
         self._restore_confirm_timer = 0.0
@@ -1071,5 +1721,6 @@ class Editor:
         fp=os.path.join(MAPS_DIR,f"{name}.json")
         try:
             with open(fp) as f: data=json.load(f)
+            self._history.clear()  # vider l'historique pour ne pas undo vers une autre map
             self._apply_state(data); return True
         except FileNotFoundError: return False

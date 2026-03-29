@@ -1,10 +1,15 @@
 {
+  "pnj_registry": [
+    {
+      "nom": "nimbus",
+      "sprite_name": null
+    }
+  ],
   "histoire": [
     {
-      "nom": "1",
+      "nom": "&",
       "maps": [
-        "map1",
-        "map2"
+        "map1"
       ]
     }
   ],

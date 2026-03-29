@@ -11,7 +11,6 @@ from core.camera import Camera
 from core.state_manager import StateManager, MENU, GAME, PAUSE, GAME_OVER
 from entities.player import Player
 from entities.enemy import Enemy
-from entities.npc import PNJ
 from world.tilemap import Platform, Wall
 from systems.lighting import LightingSystem
 from systems.spatial_grid import SpatialGrid
@@ -65,22 +64,8 @@ class Game:
             Platform(400, 300, 100, 20, BLEU),
         ]
 
-        # PNJ de la scène de départ — Nimbus, le premier personnage de l'histoire
-        self.pnjs = [
-            PNJ(350, 460, "Nimbus", [
-                [
-                    ("...", "Nimbus"),
-                    ("Tu es tombé de bien haut.", "Nimbus"),
-                ],
-                [
-                    ("Je t'attendais.", "Nimbus"),
-                    ("Tout le monde a une porte qu'il refuse d'ouvrir.", "Nimbus"),
-                ],
-                [
-                    ("Continue.", "Nimbus"),
-                ],
-            ], couleur=(190, 175, 240)),
-        ]
+        # Les PNJs sont stockés par map dans l'éditeur (self.editeur.pnjs)
+        # Plus besoin de les coder en dur ici
 
         # Grille spatiale : n'interroge que les plateformes proches du joueur
         self.grille_plateformes = SpatialGrid(cell_size=128)
@@ -272,6 +257,10 @@ class Game:
     # ── Gestion de partie ─────────────────────────────────────────────────
 
     def _nouvelle_partie(self):
+        # Désactiver l'éditeur en mode histoire
+        if self.mode == "histoire":
+            self.editeur.active = False
+
         # Charge la carte de départ selon le mode
         if self.mode == "histoire":
             config = lire_config()
@@ -315,6 +304,10 @@ class Game:
         self.joueur.dead  = False
         self.joueur.vy    = 0
 
+        # Désactiver l'éditeur quand on charge en mode histoire
+        if self.mode == "histoire":
+            self.editeur.active = False
+
         carte = donnees.get("map", "")
         if carte:
             self.editeur.load_map_for_portal(carte)
@@ -342,7 +335,7 @@ class Game:
         Cherche un PNJ proche et démarre son dialogue.
         Appelé quand le joueur appuie sur E en mode histoire.
         """
-        for pnj in self.pnjs:
+        for pnj in self.editeur.pnjs:
             if pnj.peut_interagir(self.joueur.rect):
                 lignes = pnj.conversation_actuelle()
                 if lignes:
@@ -427,7 +420,7 @@ class Game:
                         # En mode éditeur, E bascule l'éditeur
                         self.editeur.toggle()
                     elif self.mode == "histoire" and not self.dialogue.actif:
-                        # En mode histoire, E interagit avec les PNJ
+                        # En mode histoire, E interagit avec les PNJ (JAMAIS l'éditeur)
                         self._tenter_interaction()
 
                 elif event.key == pygame.K_h and not self.editeur.active:
@@ -435,10 +428,7 @@ class Game:
                         # H en mode éditeur → ouvre le gestionnaire d'histoire
                         maps_dispo = self.editeur._list_maps()
                         self.gestionnaire_histoire.ouvrir(maps_dispo)
-                    else:
-                        # H en mode histoire → bascule vers éditeur
-                        self.mode = "editeur"
-                        self.editeur._show_msg("Mode Éditeur — [E] ouvrir éditeur  [H] gérer histoire")
+                    # En mode histoire, H ne fait RIEN (le joueur ne doit pas accéder à l'éditeur)
 
                 elif self.editeur.active:
                     resultat = self.editeur.handle_key(event.key)
@@ -451,6 +441,10 @@ class Game:
                         config["carte_debut"] = nom
                         ecrire_config(config)
                         self.editeur._show_msg(f"Carte de départ définie : {nom}")
+
+            # Texte libre pour saisie PNJ (accents, |, espaces, etc.)
+            if event.type == pygame.TEXTINPUT and self.editeur.active and self.editeur._text_mode:
+                self.editeur.handle_textinput(event.text)
 
             # Souris dans l'éditeur
             if self.editeur.active and self.editeur._text_mode is None:
@@ -468,16 +462,26 @@ class Game:
                             self._reconstruire_grille()
                         self._murs_modifies()
                 if event.type == pygame.MOUSEWHEEL:
-                    self.editeur.handle_scroll(event.y)
+                    if self.camera.free_mode and not pygame.key.get_pressed()[pygame.K_LCTRL]:
+                        # Molette en cam libre = déplacement vertical
+                        self.camera.pan_scroll(event.y)
+                    else:
+                        self.editeur.handle_scroll(event.y)
 
+            # ── Caméra libre (clic molette = pan) ──
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 2:
-                if self.editeur.active and self.editeur.mode == 9:
-                    # Clic milieu en mode décor → bascule collision du décor sous le curseur
+                if self.editeur.active and self.camera.free_mode:
+                    self.camera.start_drag(event.pos)
+                elif self.editeur.active and self.editeur.mode == 9:
                     wx = int(event.pos[0] + self.camera.offset_x)
                     wy = int(event.pos[1] + self.camera.offset_y)
                     self.editeur.toggle_decor_collision_at(wx, wy)
                 else:
                     print(f"Monde x:{settings.wx} y:{settings.wy}")
+            if event.type == pygame.MOUSEBUTTONUP and event.button == 2:
+                self.camera.stop_drag()
+            if event.type == pygame.MOUSEMOTION and self.camera._drag_active:
+                self.camera.update_drag(event.pos)
 
         # ── Physique ──────────────────────────────────────────────────────
         keys  = pygame.key.get_pressed()
@@ -515,6 +519,10 @@ class Game:
         for ennemi in self.ennemis:
             if ennemi.alive:
                 self._collisions_ennemis(ennemi, murs)
+
+        # ── PNJ animation ────────────────────────────────────────────────
+        for pnj in self.editeur.pnjs:
+            pnj.update()
 
         # ── Systèmes ──────────────────────────────────────────────────────
         self.lumieres.update(dt)
@@ -562,14 +570,14 @@ class Game:
                 decor.draw(self.screen, self.camera)
                 if self.editeur.active and self.editeur.show_hitboxes and decor.collision:
                     pygame.draw.rect(self.screen, (255, 100, 0),
-                                     self.camera.apply(decor.rect), 1)
+                                     self.camera.apply(decor.collision_rect), 1)
 
         for ennemi in self.ennemis:
             if self.camera.is_visible(ennemi.rect):
                 ennemi.draw(self.screen, self.camera, self.editeur.show_hitboxes)
 
-        # PNJ — en mode histoire uniquement (pas besoin de les voir dans l'éditeur seul)
-        for pnj in self.pnjs:
+        # PNJ — chargés depuis la map courante
+        for pnj in self.editeur.pnjs:
             if self.camera.is_visible(pnj.rect):
                 pnj.draw(self.screen, self.camera, self.joueur.rect)
 

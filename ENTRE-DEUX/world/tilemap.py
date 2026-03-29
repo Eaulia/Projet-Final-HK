@@ -42,9 +42,14 @@ class Wall:
 
 
 class Decor:
-    """Élément de décor placé dans le monde. Peut bloquer le joueur si collision=True."""
+    """Élément de décor placé dans le monde. Peut bloquer le joueur si collision=True.
 
-    def __init__(self, x, y, chemin_image, nom_sprite, collision=False, echelle=1.0):
+    collision_box : (ox, oy, w, h) relatif au coin haut-gauche du décor.
+                    Si None, la hitbox = le rect de l'image entière.
+    """
+
+    def __init__(self, x, y, chemin_image, nom_sprite, collision=False,
+                 echelle=1.0, collision_box=None):
         self.nom_sprite = nom_sprite
         self.collision  = collision
         self.echelle    = echelle
@@ -62,14 +67,28 @@ class Decor:
 
         self.rect = pygame.Rect(x, y, self.image.get_width(), self.image.get_height())
 
+        # Hitbox personnalisée (ox, oy, w, h) relative au rect — None = image entière
+        self.collision_box = collision_box
+
+    @property
+    def collision_rect(self):
+        """Retourne le rect de collision dans le monde."""
+        if self.collision_box:
+            ox, oy, cw, ch = self.collision_box
+            return pygame.Rect(self.rect.x + ox, self.rect.y + oy, cw, ch)
+        return self.rect
+
     def verifier_collision(self, entite):
         if self.collision:
-            resoudre_collision(entite, self.rect, mode_mur=False)
+            resoudre_collision(entite, self.collision_rect, mode_mur=False)
 
     def draw(self, surf, camera):
         surf.blit(self.image, camera.apply(self.rect))
 
     def to_dict(self):
-        return {"x": self.rect.x, "y": self.rect.y,
-                "sprite": self.nom_sprite, "collision": self.collision,
-                "echelle": self.echelle}
+        d = {"x": self.rect.x, "y": self.rect.y,
+             "sprite": self.nom_sprite, "collision": self.collision,
+             "echelle": self.echelle}
+        if self.collision_box:
+            d["collision_box"] = list(self.collision_box)
+        return d

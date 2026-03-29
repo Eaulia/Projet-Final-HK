@@ -1,5 +1,6 @@
 {
   "ground_y": 590,
+  "ceiling_y": 0,
   "scene_width": 1600,
   "camera_y_offset": 150,
   "spawn": {
@@ -42,17 +43,62 @@
       "h": 17
     }
   ],
+  "custom_walls": [],
+  "ground_segments": [
+    {
+      "x": 0,
+      "y": 590,
+      "w": 1600,
+      "h": 800
+    }
+  ],
+  "ceiling_segments": [
+    {
+      "x": 0,
+      "y": -800,
+      "w": 1600,
+      "h": 800
+    }
+  ],
+  "left_segments": [
+    {
+      "x": -800,
+      "y": -800,
+      "w": 800,
+      "h": 2190
+    }
+  ],
+  "right_segments": [
+    {
+      "x": 1600,
+      "y": -800,
+      "w": 800,
+      "h": 2190
+    }
+  ],
+  "holes": [],
   "enemies": [
     {
-      "x": 7607,
-      "y": 550,
+      "x": 7542,
+      "y": 499,
       "has_gravity": true,
       "has_collision": true,
       "sprite_name": "monstre_perdu.png",
       "can_jump": false,
+      "can_jump_patrol": false,
       "jump_power": 400,
       "detect_range": 200,
-      "detect_height": 80
+      "detect_height": 80,
+      "has_light": false,
+      "light_type": "dim",
+      "light_radius": 100,
+      "patrol_left": 7307,
+      "patrol_right": 7907,
+      "can_fall_in_holes": false,
+      "respawn_timeout": 10.0,
+      "can_turn_randomly": false,
+      "patrol_speed": 120,
+      "chase_speed": 200
     }
   ],
   "lights": [
@@ -82,6 +128,33 @@
       "target_map": "map2",
       "target_x": -1,
       "target_y": -1
+    }
+  ],
+  "decors": [],
+  "pnjs": [
+    {
+      "type": "pnj",
+      "x": 312,
+      "y": 536,
+      "nom": "nimbus",
+      "sprite_name": null,
+      "dialogues": [
+        [
+          [
+            "rdlmgjkljkdfg",
+            "nimbus"
+          ],
+          [
+            "rtgeojkmretsgoij",
+            "nimbus"
+          ],
+          [
+            "uoui",
+            "nimbus"
+          ]
+        ]
+      ],
+      "dialogue_mode": "boucle_dernier"
     }
   ]
 }
