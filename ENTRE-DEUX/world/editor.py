@@ -147,14 +147,15 @@ class Editor:
         self.bloc_scale = 1            # multiplicateur de taille (1=32px, 2=64px, etc.)
         self._BLOC_ECHELLES = [1, 2, 3, 4]
         self._bloc_base_size = 32      # taille de base d'un bloc en pixels
-        self._bloc_shape = 0           # 0=plein, 1=contour, 2=ligne H, 3=ligne V
-        self._BLOC_SHAPES = ["Plein", "Contour", "Ligne H", "Ligne V"]
+        self._bloc_shape = 0           # 0=plein, 1=contour, 2=ligne H, 3=ligne V, 4=terre
+        self._BLOC_SHAPES = ["Plein", "Contour", "Ligne H", "Ligne V", "Terre"]
         self._bloc_facing = 0          # 0=extérieur, 1=intérieur (contour) / 0=gauche, 1=droite (ligne V)
         self._BLOC_FACINGS = {
             0: ["—", "—"],             # plein : pas de choix
             1: ["Extérieur", "Intérieur"],  # contour
             2: ["—", "—"],             # ligne H : pas de choix
             3: ["Mur →", "Mur ←"],    # ligne V : direction du mur
+            4: ["—", "—"],             # terre : pas de choix
         }
 
         self.mode = 0
@@ -1002,11 +1003,14 @@ class Editor:
         """Auto-tiling : 2 clics définissent une zone, remplie selon la forme choisie."""
         import random as _rnd
         cell = self._bloc_base_size * self.bloc_scale
-        shape = self._bloc_shape  # 0=plein, 1=contour, 2=ligne H, 3=ligne V
+        shape = self._bloc_shape  # 0=plein, 1=contour, 2=ligne H, 3=ligne V, 4=terre
+        theme = self.bloc_theme
 
         if self.first_point is None:
             self.first_point = ((wx // cell) * cell, (wy // cell) * cell)
-            if shape in (2, 3):
+            if shape == 4:
+                self._show_msg("Terre : clic pour le coin opposé")
+            elif shape in (2, 3):
                 self._show_msg("Blocs : clic pour la fin de la ligne")
             else:
                 self._show_msg("Blocs : clic pour le coin opposé")
@@ -1034,10 +1038,33 @@ class Editor:
             cols = 1
             rw = cell
 
-        theme = self.bloc_theme
         self._snapshot()
         count = 0
 
+        # ── Mode Terre : uniquement intérieur, sans collision ──
+        if shape == 4:
+            for row in range(rows):
+                for col in range(cols):
+                    r = _rnd.random()
+                    if r < 0.08:
+                        tile_name = f"interieur_fossile_{theme}_{_rnd.randint(1,3)}.png"
+                    elif r < 0.38:
+                        tile_name = f"interieur_os_{theme}_{_rnd.randint(1,3)}.png"
+                    else:
+                        tile_name = f"interieur_{theme}_{_rnd.randint(1,3)}.png"
+                    chemin = os.path.join(DECORS_DIR, "blocs", tile_name)
+                    if not os.path.exists(chemin):
+                        continue
+                    bx = x + col * cell
+                    by = y + row * cell
+                    self.decors.append(Decor(bx, by, chemin, f"blocs/{tile_name}",
+                                             collision=False,
+                                             echelle=self.bloc_scale))
+                    count += 1
+            self._show_msg(f"Terre : {count} tuiles ({cols}x{rows}) — {theme}")
+            return
+
+        # ── Autres modes (plein, contour, lignes) ──
         for row in range(rows):
             for col in range(cols):
                 # En mode contour, sauter l'intérieur
