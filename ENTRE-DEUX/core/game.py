@@ -24,6 +24,7 @@ from world.collision import (verifier_attaques,
                              verifier_contact_ennemi)
 from ui.inventory import Inventory
 from ui.gestionnaire_histoire import GestionnaireHistoire
+from audio import music_manager, sound_manager
 
 if not hasattr(settings, 'CEILING_Y'):
     settings.CEILING_Y = 0
@@ -51,6 +52,12 @@ class Game:
         # Overlays de sélection actifs (None = inactif)
         self._menu_choix_carte  = None   # menu de sélection de carte avant d'entrer en éditeur
         self._font_indicateur   = pygame.font.SysFont("Consolas", 48, bold=True)
+
+        # __ Sons ________________________________
+        music_manager.jouer("assets/music/fond.mp3", volume=0.4) # Musique de fond
+        sound_manager.charger("attaque", "assets/sound/attaque.mp3")
+        sound_manager.charger("pas", "assets/sound/pas.mp3")
+        sound_manager.charger("mort", "assets/sound/mort.mp3")
 
         # ── Objets du jeu ──────────────────────────────────────────────────
         self.inventory = Inventory()
