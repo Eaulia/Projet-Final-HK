@@ -54,7 +54,7 @@ class Game:
         self._font_indicateur   = pygame.font.SysFont("Consolas", 48, bold=True)
 
         # __ Sons ________________________________
-        music_manager.jouer("ENTRE-DEUX/assets/music/fond.mp3", volume=0.4) # Musique de fond dès le lancement du jeu
+        music_manager.jouer("ENTRE-DEUX/assets/music/i think about you not thinking about me Piano Solo.mp3", volume=0.4) # Musique de fond dès le lancement du jeu
 
         sound_manager.charger("attaque", "ENTRE-DEUX/assets/sounds/attaque.mp3")
         sound_manager.charger("pas", "ENTRE-DEUX/assets/sounds/pas.mp3")
