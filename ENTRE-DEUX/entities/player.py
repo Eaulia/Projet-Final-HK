@@ -20,10 +20,11 @@ class Player:
         self.puissance_saut = JUMP_POWER
         self.speed = PLAYER_SPEED
         self.on_ground = True
-        self.direction = 1
+        self.direction = 0
         self.attacking = False
         self.attack_rect = pygame.Rect(0, 0, 40, 40)
         self.attack_timer = 0
+        self.walking = False
 
         # Spawn
         self.spawn_x = pos[0]
@@ -47,10 +48,16 @@ class Player:
 
         self.idle_anim = Animation(
             [
-                pygame.image.load(find_file("player_idle.png")),
-                pygame.image.load(find_file("player_idle2.png"))
+                pygame.image.load(find_file("hrwalk_0000.png")), 
+                pygame.image.load(find_file("hrwalk_0001.png")), 
+                pygame.image.load(find_file("hrwalk_0002.png")),
+                pygame.image.load(find_file("hrwalk_0003.png")),
+                pygame.image.load(find_file("hrwalk_0004.png")),
+                pygame.image.load(find_file("hrwalk_0005.png")),
+                pygame.image.load(find_file("hrwalk_0006.png")), 
+                pygame.image.load(find_file("hrwalk_0007.png"))
             ],
-            img_dur=20
+            img_dur=10
         )
 
         self._heart_font = None
@@ -95,10 +102,15 @@ class Player:
         # Clavier
         if keys[K_d]:
             self.vx = self.speed
-            self.direction = -1
+            self.direction = 1
+            self.walking = True
         elif keys[K_q]:
             self.vx = -self.speed
-            self.direction = 1
+            self.direction = -1
+            self.walking = True
+        else:
+            self.walking = False
+            self.idle_anim.stop(img_index=2)
 
         # Regarder en haut → affiche la vie
         if keys[K_z] or keys[K_UP]:
@@ -187,8 +199,11 @@ class Player:
             self.step_timer = 0.2 # reset du timer pour éviter de jouer le son de pas dès que le joueur recommence à marcher
 
     def draw(self, surf, camera, show_hitbox=False):
+        if self.walking:
+            self.idle_anim.update()
+
         img = self.idle_anim.img()
-        self.idle_anim.update()
+
         if self.direction == -1:
             img = pygame.transform.flip(img, True, False)
 
