@@ -1,187 +1,628 @@
-# ─────────────────────────────────────────
-#  ENTRE-DEUX — Joueur
-# ─────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+#  LIMINAL (ENTRE-DEUX) — Joueur (le personnage contrôlé)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+#  À QUOI SERT CE FICHIER ?
+#  ------------------------
+#  Ce fichier contient UNE seule classe : Player.
+#  C'est le personnage principal du jeu — celui que le joueur contrôle au
+#  clavier ou à la manette. Toutes ses capacités sont gérées ici :
+#
+#     - se déplacer (Q / D ou joystick)
+#     - sauter (Espace / Croix)
+#     - DASH  (Shift / L1 / R1)       → foncée horizontale rapide
+#     - DOUBLE SAUT (2e Espace en l'air)
+#     - ATTAQUER (F / Carré)           → devant, ou vers le bas (S+F en l'air)
+#     - POGO (attaque-bas qui touche)  → rebond comme dans Hollow Knight
+#     - WALL-SLIDE + WALL-JUMP         → glisser contre un mur et rebondir
+#     - COYOTE TIME + JUMP BUFFER      → sauts plus tolérants (voir [D23])
+#     - ENCAISSER un coup              → knockback, invincibilité courte, -1 PV
+#     - RÉGÉNÉRER                      → récupérer 1 PV quand on reste immobile
+#
+#  OÙ EST-CE UTILISÉ ?
+#  -------------------
+#  Une seule instance est créée dans core/game.py :
+#        self.joueur = Player(PLAYER_SPAWN)
+#
+#  Chaque frame, game.py appelle dans l'ordre :
+#        self.joueur.mouvement(dt, keys, holes)       ← lit les entrées, bouge
+#        ... résolution des collisions par world/collision.py ...
+#        self.joueur.post_physics()                   ← corrige contre les murs
+#        self.joueur.draw(screen, camera)             ← dessine le sprite
+#
+#  Quand un ennemi touche le joueur :
+#        self.joueur.hit_by_enemy(ennemi.rect)
+#
+#  Quand l'attaque-bas touche un ennemi (pogo) :
+#        self.joueur.on_pogo_hit()
+#
+#  JE VEUX MODIFIER QUOI ?
+#  -----------------------
+#  - La vitesse / la hauteur de saut / les dégâts etc. → settings.py
+#  - Les TOUCHES  (quelle touche fait quoi)            → core/event_handler.py
+#  - Le COMPORTEMENT (logique du saut, du dash...)     → ici, méthode mouvement()
+#  - L'ANIMATION (sprites de marche)                   → méthode _charger_frames_marche()
+#  - Les CŒURS affichés au-dessus du joueur            → méthode _draw_hearts()
+#  - La HITBOX (rectangle de collision)                → hitboxes.json (édité par world/editor.py)
+#
+#  CONCEPTS UTILISÉS (voir docs/DICTIONNAIRE.md) :
+#  -----------------------------------------------
+#  [D4]  pygame.Rect       — la hitbox est un Rect
+#  [D10] dt (delta time)   — on multiplie les vitesses par dt
+#  [D11] math.hypot        — (pas utilisé ici mais dans les compagnons)
+#  [D22] Machine à états   — self.dashing, self.attacking, self.wall_sliding
+#  [D23] Coyote / buffer   — tolérances de saut
+#
+# ─────────────────────────────────────────────────────────────────────────────
 
 import pygame
 from pygame.locals import *
+
+# On importe settings pour les variables runtime (settings.axis_x, etc.)
 import settings
-from utils import *
-from settings import *
+# Et les constantes qu'on utilise souvent (évite d'écrire settings.GRAVITY partout)
+from settings import (
+    GRAVITY, JUMP_POWER, PLAYER_SPEED,
+    PLAYER_W, PLAYER_H,
+    ATTACK_DURATION, ATTACK_RECT_W, ATTACK_RECT_H,
+    ATTACK_DOWN_W, ATTACK_DOWN_H, POGO_BOUNCE_VY,
+    PLAYER_MAX_HP, INVINCIBLE_DURATION, HP_DISPLAY_DURATION,
+    REGEN_DELAY, REGEN_INTERVAL,
+    KNOCKBACK_PLAYER, KNOCKBACK_DECAY,
+    DASH_SPEED, DASH_DURATION, DASH_COOLDOWN,
+    DOUBLE_JUMP_POWER, COYOTE_TIME, JUMP_BUFFER,
+    WALL_SLIDE_SPEED, WALL_JUMP_VX, WALL_JUMP_VY, WALL_JUMP_LOCK,
+    DEAD_ZONE, BTN_CROIX, BTN_CARRE, BTN_L1, BTN_R1,
+    BLANC, VOLUME_PAS,
+)
+from utils import find_file
 from entities.animation import Animation
 from audio import sound_manager
+from systems.hitbox_config import get_player_hitbox
+
+
+# ─── Constantes locales à ce fichier ─────────────────────────────────────────
+# Cadence des pas : un son "pas" toutes les STEP_INTERVAL secondes en marche.
+# Trop petit → piétinement désagréable. Trop grand → on entend à peine les pas.
+STEP_INTERVAL = 0.35
 
 
 class Player:
-    def __init__(self, pos=(0, 0)):
-        self.rect = pygame.Rect(pos[0], pos[1], 90, 104)
-        self.vx = 0
-        self.vy = 0
-        self.gravity = GRAVITY
-        self.puissance_saut = JUMP_POWER
-        self.speed = PLAYER_SPEED
-        self.on_ground = True
-        self.direction = 0
-        self.attacking = False
-        self.attack_rect = pygame.Rect(0, 0, 40, 40)
-        self.attack_timer = 0
-        self.walking = False
+    """Le personnage contrôlé par le joueur."""
 
-        # Spawn
+    # ═════════════════════════════════════════════════════════════════════════
+    # 1.  CONSTRUCTION — appelée UNE fois quand on fait Player(...)
+    # ═════════════════════════════════════════════════════════════════════════
+    #
+    # À QUOI SERT __init__ ?                                  voir [D31]
+    # ----------------------
+    # C'est le « constructeur » : c'est exécuté au moment où on écrit
+    # `self.joueur = Player((100, 400))` dans game.py.
+    # On y initialise TOUTES les variables de l'objet (self.x, self.hp, ...).
+    #
+    # Si tu ajoutes une nouvelle variable à Player, pense à lui donner
+    # une valeur ICI (sinon tu auras un AttributeError plus tard).
+
+    def __init__(self, pos=(0, 0)):
+        # ── Hitbox (rectangle invisible utilisé pour les collisions) ──
+        # La hitbox est lue depuis hitboxes.json (éditable dans l'éditeur,
+        # touche 6). Si le fichier est vide, on utilise PLAYER_W × PLAYER_H
+        # comme valeurs de repli.
+        #
+        # ox / oy = décalage du sprite à l'intérieur de la hitbox. Ça permet
+        # d'avoir un sprite plus grand que la hitbox (le personnage déborde
+        # visuellement sans qu'on prenne des coups "dans le vide").
+        hb = get_player_hitbox()
+        self.hitbox_w  = hb.get("w",  PLAYER_W)
+        self.hitbox_h  = hb.get("h",  PLAYER_H)
+        self.hitbox_ox = hb.get("ox", 0)
+        self.hitbox_oy = hb.get("oy", 0)
+
+        # Le Rect est l'outil pygame qu'on utilisera pour toutes les
+        # collisions (sol, murs, ennemis). Voir [D4].
+        self.rect    = pygame.Rect(pos[0], pos[1], self.hitbox_w, self.hitbox_h)
+
+        # Position de spawn : mémorisée pour respawn() (après la mort).
         self.spawn_x = pos[0]
         self.spawn_y = pos[1]
 
-        # Invincibilité
-        self.invincible = False
-        self.invincible_timer = 0.0
-        self.INVINCIBLE_DURATION = 1.0
-        self.knockback_vx = 0.0
+        # ── Vitesses & état physique ──
+        # vx / vy sont en pixels PAR SECONDE. On les multiplie par dt
+        # quand on les applique à rect.x / rect.y (voir [D10]).
+        self.vx            = 0
+        self.vy            = 0
+        self.knockback_vx  = 0.0      # vitesse "poussée" (après avoir pris un coup)
+        self.on_ground     = True     # True = pieds au sol
+        self.direction     = 1        # 1 = regarde à droite, -1 = à gauche
+        self.walking       = False    # True = se déplace horizontalement
+        self.looking_up    = False    # True = appuie vers le haut
 
-        # Vie
-        self.max_hp = 5
-        self.hp = self.max_hp
-        self.dead = False
-        self.show_hp_timer = 0.0   # temps restant pour afficher la vie
-        self.HP_DISPLAY_DURATION = 2.0  # secondes
+        # ── Constantes physiques (copiées pour autoriser des bonus en jeu) ──
+        # On copie les valeurs de settings au lieu de les lire directement,
+        # ce qui permettrait dans le futur d'avoir un power-up qui augmente
+        # la vitesse du joueur sans toucher à settings.
+        self.gravity        = GRAVITY
+        self.puissance_saut = JUMP_POWER
+        self.speed          = PLAYER_SPEED
 
-        # Regard (pour afficher la vie)
-        self.looking_up = False
+        # ── Combat ──
+        self.attacking        = False                 # True pendant une attaque
+        self.attack_dir       = "side"                # "side" ou "down"
+        self.attack_rect      = pygame.Rect(0, 0, ATTACK_RECT_W, ATTACK_RECT_H)
+        self.attack_timer     = 0                     # temps restant de l'attaque
+        # Drapeau qui assure qu'un pogo ne se déclenche qu'une fois par attaque.
+        self._attack_buffered = False
 
-        self.idle_anim = Animation(
-            [
-                pygame.image.load(find_file("hrwalk_0000.png")), 
-                pygame.image.load(find_file("hrwalk_0001.png")), 
-                pygame.image.load(find_file("hrwalk_0002.png")),
-                pygame.image.load(find_file("hrwalk_0003.png")),
-                pygame.image.load(find_file("hrwalk_0004.png")),
-                pygame.image.load(find_file("hrwalk_0005.png")),
-                pygame.image.load(find_file("hrwalk_0006.png")), 
-                pygame.image.load(find_file("hrwalk_0007.png"))
-            ],
-            img_dur=10
-        )
+        # ── Vie & dégâts ──
+        self.max_hp           = PLAYER_MAX_HP
+        self.hp               = self.max_hp
+        self.dead             = False
+        self.invincible       = False
+        self.invincible_timer = 0.0      # secondes restantes d'invincibilité
+        self.show_hp_timer    = 0.0      # secondes restantes d'affichage des cœurs
 
+        # ── Régénération passive ──
+        # Le joueur récupère 1 PV s'il reste TOTALEMENT immobile au sol
+        # pendant REGEN_DELAY secondes, puis 1 de plus toutes les REGEN_INTERVAL.
+        # Tout input ou dégât remet _idle_timer à 0.
+        self._idle_timer      = 0.0
+        self.regen_active     = False    # signalé au HUD pour afficher une icône
+
+        # ── Capacités Hollow Knight ──
+        self.dashing          = False    # True pendant un dash
+        self.dash_timer       = 0.0
+        self.dash_cooldown    = 0.0      # délai avant le prochain dash
+        self.dash_dir         = 1        # direction du dash en cours
+        self.jumps_used       = 0        # 0 = aucun, 1 = saut sol, 2 = double saut
+        self.coyote_timer     = 0.0      # > 0 → on peut encore sauter "depuis le sol" [D23]
+        self.jump_buffer      = 0.0      # > 0 → un saut a été pré-bufferisé [D23]
+        self.against_wall     = 0        # 0=rien, -1=mur à gauche, +1=mur à droite
+        self.wall_lock_timer  = 0.0      # ignore l'input opposé après un wall-jump
+        self.wall_sliding     = False    # True = glisse contre un mur
+
+        # ── Détection des appuis ("fronts montants") ──
+        # On veut détecter le moment où on APPUIE sur une touche (pas quand on
+        # la maintient). Pour ça, on compare "était-elle pressée la frame
+        # précédente ?" avec "est-elle pressée maintenant ?".
+        #   - True cette frame + False la précédente  → front montant (déclenche)
+        #   - True des deux côtés                     → touche maintenue (ignore)
+        self._prev_jump   = False
+        self._prev_dash   = False
+        self._prev_attack = False
+
+        # ── Animation (sprites de marche) ──
+        frames = self._charger_frames_marche()
+        self.sprite_w  = frames[0].get_width()
+        self.sprite_h  = frames[0].get_height()
+        self.idle_anim = Animation(frames, img_dur=10)
+        self.step_timer = STEP_INTERVAL
+
+        # ── Cache de la police (créée à la 1re utilisation dans _draw_hearts) ──
         self._heart_font = None
-        self.step_timer = 0.1  #chrono pour ne pas jouer le son de pas trop vite
+
+        # ── Mémoire pour post_physics() ──
+        # On mémorise ici la position X qu'on VOULAIT atteindre cette frame.
+        # Après la résolution des collisions, si rect.x est différent de
+        # _intended_x, c'est qu'un mur a poussé le joueur → on active le
+        # wall-slide. Voir post_physics() pour le détail.
+        #
+        # On l'initialise dès __init__ pour éviter d'avoir à utiliser
+        # getattr() plus tard (plus lisible).
+        self._intended_x = self.rect.x
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # 2.  CHARGEMENT DES SPRITES DE MARCHE
+    # ═════════════════════════════════════════════════════════════════════════
+    #
+    # On cherche 8 frames nommées hrwalk_0000.png ... hrwalk_0007.png.
+    # Si elles ne sont pas toutes là, on se rabat sur player_idle.png.
+    # Si même ce fichier manque, on crée un rectangle rose vif pour que le
+    # jeu puisse au moins démarrer (et qu'on voie tout de suite le problème).
+
+    def _charger_frames_marche(self):
+        """Charge les 8 frames de marche, avec repli si des fichiers manquent."""
+        frames = []
+        for i in range(8):
+            try:
+                frames.append(pygame.image.load(find_file(f"hrwalk_000{i}.png")))
+            except FileNotFoundError:
+                # Dès qu'une frame manque, on arrête (on garde celles qu'on a).
+                break
+
+        # Cas 1 : on a trouvé au moins une frame → on la/les utilise.
+        if frames:
+            return frames
+
+        # Cas 2 : aucune frame → on essaie player_idle.png.
+        try:
+            return [pygame.image.load(find_file("player_idle.png"))]
+        except FileNotFoundError:
+            # Cas 3 : même ça manque → carré rose (sprite de secours).
+            placeholder = pygame.Surface((PLAYER_W, PLAYER_H))
+            placeholder.fill((255, 0, 200))
+            return [placeholder]
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # 3.  CYCLE DE VIE (respawn, rechargement de la hitbox)
+    # ═════════════════════════════════════════════════════════════════════════
 
     def respawn(self):
-        self.rect.x = self.spawn_x
-        self.rect.y = self.spawn_y
-        self.vx = 0
-        self.vy = 0
+        """Fait réapparaître le joueur à son point de spawn avec PV pleins.
+
+        Utilisé quand :
+          - le joueur meurt (écran "Game Over" puis respawn)
+          - on change de scène et on veut recaler le joueur proprement
+        """
+        self.rect.x       = self.spawn_x
+        self.rect.y       = self.spawn_y
+        self.vx           = 0
+        self.vy           = 0
         self.knockback_vx = 0
-        self.on_ground = False
-        self.hp = self.max_hp
-        self.dead = False
+        self.on_ground    = False
+        self.hp           = self.max_hp
+        self.dead         = False
+        self.dashing      = False
+        self.dash_timer   = 0.0
+        self.jumps_used   = 0
+        self._idle_timer  = 0.0
+        self.regen_active = False
+
+    def reload_hitbox(self):
+        """Relit la hitbox depuis hitboxes.json.
+
+        Utilisé quand tu édites la hitbox du joueur dans le mode 6 de
+        l'éditeur : on recharge la nouvelle taille SANS replacer le joueur
+        (on garde le centre-bas pour qu'il reste au sol comme avant).
+        """
+        cx     = self.rect.centerx
+        bottom = self.rect.bottom
+        hb = get_player_hitbox()
+        self.hitbox_w  = hb.get("w",  PLAYER_W)
+        self.hitbox_h  = hb.get("h",  PLAYER_H)
+        self.hitbox_ox = hb.get("ox", 0)
+        self.hitbox_oy = hb.get("oy", 0)
+        self.rect.size      = (self.hitbox_w, self.hitbox_h)
+        self.rect.midbottom = (cx, bottom)
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # 4.  DÉGÂTS / COMBAT (événements ponctuels)
+    # ═════════════════════════════════════════════════════════════════════════
 
     def hit_by_enemy(self, enemy_rect):
+        """Appelé par systems/combat.py quand un ennemi touche le joueur.
+
+        Effets : recul (knockback), invincibilité courte, -1 PV, son.
+        Si PV ≤ 0 → self.dead = True (la boucle de jeu affichera "Game Over").
+        """
+        # Déjà invincible ou mort ? → on ignore ce coup.
         if self.invincible or self.dead:
             return
+
+        # ── Calcul du recul ──
+        # On pousse le joueur dans la direction OPPOSÉE à celle de l'ennemi.
         if self.rect.centerx < enemy_rect.centerx:
-            self.knockback_vx = -300
+            # L'ennemi est à ma droite → je recule vers la gauche.
+            self.knockback_vx = -KNOCKBACK_PLAYER
         else:
-            self.knockback_vx = 300
+            self.knockback_vx = KNOCKBACK_PLAYER
+        # Petit bond vertical pour donner un effet "ouch" dynamique.
         self.vy = -150
-        self.invincible = True
-        self.invincible_timer = self.INVINCIBLE_DURATION
+
+        # On annule un dash en cours : un joueur ne peut pas à la fois
+        # dasher (invincible) ET se faire toucher. Cohérence visuelle.
+        self.dashing = False
+
+        # Déclenchement de l'invincibilité.
+        self.invincible       = True
+        self.invincible_timer = INVINCIBLE_DURATION
+
+        # Perte de PV et affichage des cœurs.
         self.hp -= 1
         sound_manager.jouer("degat")
-        self.show_hp_timer = self.HP_DISPLAY_DURATION
+        self.show_hp_timer = HP_DISPLAY_DURATION
+
+        # Mort ?
         if self.hp <= 0:
             self.dead = True
             sound_manager.jouer("mort")
 
-    def mouvement(self, dt, keys, holes=None):
-        self.vx = 0
-        self.looking_up = False
+    def on_pogo_hit(self):
+        """Appelé quand l'attaque-bas touche un ennemi → rebond vers le haut.
 
-        # Manette
+        C'est le fameux "pogo" de Hollow Knight : frapper vers le bas sur un
+        ennemi en l'air permet de rebondir et d'enchaîner les sauts.
+        """
+        if self.attack_dir == "down":
+            self.vy         = POGO_BOUNCE_VY   # impulsion vers le haut
+            self.jumps_used = 1                # autorise un double-saut après le pogo
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # 5.  LECTURE DES ENTRÉES (clavier AZERTY + manette PS5)
+    # ═════════════════════════════════════════════════════════════════════════
+    #
+    # Chaque fonction renvoie une valeur simple : un entier (-1/0/+1) pour
+    # les axes, un booléen pour les boutons. Ça permet à mouvement() de ne
+    # PAS se soucier de savoir si c'est le clavier ou la manette qui joue.
+
+    def _input_axis_x(self, keys):
+        """Renvoie -1 (gauche), 0 (rien) ou +1 (droite)."""
+        # Priorité au joystick s'il est sorti de sa zone morte.
         if abs(settings.axis_x) > DEAD_ZONE:
-            self.vx = settings.axis_x * self.speed
-            self.direction = -1 if settings.axis_x > 0 else 1
-
-        # Clavier
+            if settings.axis_x < 0:
+                return -1
+            else:
+                return 1
+        # Sinon, on lit le clavier AZERTY (Q/D).
         if keys[K_d]:
-            self.vx = self.speed
-            self.direction = 1
-            self.walking = True
-        elif keys[K_q]:
-            self.vx = -self.speed
-            self.direction = -1
-            self.walking = True
-        else:
-            self.walking = False
-            self.idle_anim.stop(img_index=2)
+            return 1
+        if keys[K_q]:
+            return -1
+        return 0
 
-        # Regarder en haut → affiche la vie
+    def _input_axis_y(self, keys):
+        """Renvoie -1 (haut), 0 ou +1 (bas)."""
+        if abs(settings.axis_y) > DEAD_ZONE:
+            if settings.axis_y < 0:
+                return -1
+            else:
+                return 1
         if keys[K_z] or keys[K_UP]:
-            self.looking_up = True
-            self.show_hp_timer = self.HP_DISPLAY_DURATION
+            return -1
+        if keys[K_s] or keys[K_DOWN]:
+            return 1
+        return 0
 
+    def _input_jump(self, keys):
+        """True si Espace est enfoncée OU si Croix (PS5) l'est."""
+        if keys[K_SPACE]:
+            return True
+        if settings.manette and settings.manette.get_button(BTN_CROIX):
+            return True
+        return False
+
+    def _input_attack(self, keys):
+        """True si F est enfoncée OU si Carré l'est."""
+        if keys[K_f]:
+            return True
+        if settings.manette and settings.manette.get_button(BTN_CARRE):
+            return True
+        return False
+
+    def _input_dash(self, keys):
+        """True si Shift (gauche ou droit) est enfoncée OU L1/R1."""
+        if keys[K_LSHIFT] or keys[K_RSHIFT]:
+            return True
+        if settings.manette:
+            # On accepte L1 OU R1 (certains joueurs préfèrent l'une ou l'autre).
+            if settings.manette.get_button(BTN_L1) or settings.manette.get_button(BTN_R1):
+                return True
+        return False
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # 6.  MOUVEMENT PRINCIPAL — appelé CHAQUE FRAME par game.py
+    # ═════════════════════════════════════════════════════════════════════════
+    #
+    # C'est LE point d'entrée de la logique du joueur. Les étapes sont
+    # numérotées pour que tu puisses suivre dans l'ordre. En résumé :
+    #
+    #   1. Lire les entrées
+    #   2. Décrémenter les timers
+    #   3. Gérer le wall-lock (recul du wall-jump)
+    #   4. Calculer la vitesse horizontale
+    #   5. Appliquer le knockback
+    #   6. Regard vers le haut → montrer les cœurs
+    #   7. Saut (avec coyote time et jump buffer)
+    #   8. Dash
+    #   9. Gravité
+    #  10. Détecter le wall-slide
+    #  11. Appliquer le déplacement (rect.x += vx*dt)
+    #  12. Collisions avec le sol et le plafond
+    #  13. Reset des sauts au sol
+    #  14. Attaque (hitbox)
+    #  15. Son de pas
+    #  16. Timers de combat (invincibilité, attaque)
+    #  17. Régénération passive
+    #
+    # Les collisions avec les plateformes sont gérées APRÈS par collision.py.
+
+    def mouvement(self, dt, keys, holes=None):
+        # ── 1. Lecture des entrées ────────────────────────────────────────
+        ax = self._input_axis_x(keys)          # -1, 0, +1
+        ay = self._input_axis_y(keys)
+        jump_held   = self._input_jump(keys)
+        attack_held = self._input_attack(keys)
+        dash_held   = self._input_dash(keys)
+
+        # Fronts montants : "juste pressé CE frame-ci" (voir __init__ pour
+        # l'explication). On met à jour les mémoires _prev_* APRÈS avoir
+        # calculé les fronts, sinon on écrase la valeur précédente trop tôt.
+        jump_pressed   = jump_held   and not self._prev_jump
+        attack_pressed = attack_held and not self._prev_attack
+        dash_pressed   = dash_held   and not self._prev_dash
+        self._prev_jump   = jump_held
+        self._prev_attack = attack_held
+        self._prev_dash   = dash_held
+
+        # ── 2. Décrémentation des timers d'état ───────────────────────────
+        self._tick_state_timers(dt)
+
+        # ── 3. Wall-lock : après un wall-jump, on ignore l'input opposé ──
+        # Pourquoi ? Le joueur vient de se propulser dans un sens ; s'il
+        # maintient la direction vers le mur, il reviendrait coller dessus
+        # tout de suite. On lui "refuse" cette direction pendant WALL_JUMP_LOCK.
+        if self.wall_lock_timer > 0:
+            # ax * self.direction < 0 = l'input va DANS L'AUTRE SENS que la
+            # direction actuelle (celle donnée par le wall-jump).
+            if ax * self.direction < 0:
+                ax = 0
+
+        # ── 4. Calcul de la vitesse horizontale ───────────────────────────
+        if self.dashing:
+            # Pendant un dash, la vitesse est fixée (ignore l'input).
+            self.vx      = DASH_SPEED * self.dash_dir
+            self.walking = False
+        else:
+            self.vx      = ax * self.speed
+            self.walking = (ax != 0)
+            # On ne change la direction "regardée" que si on bouge vraiment.
+            if ax != 0:
+                self.direction = ax
+
+        # Si on ne fait rien, on bloque l'animation sur la frame "idle" (2).
+        if not self.walking and not self.dashing:
+            self.idle_anim.pause_at(2)
+
+        # ── 5. Knockback (recul après avoir pris un coup) ─────────────────
+        # On l'ajoute à la vitesse courante, puis on l'amortit (× 0.85).
+        # Quand il devient tout petit, on le met à zéro "net".
         self.vx += self.knockback_vx
         if abs(self.knockback_vx) > 1:
-            self.knockback_vx *= 0.85
+            self.knockback_vx *= KNOCKBACK_DECAY
         else:
             self.knockback_vx = 0
 
-        # Gravité
-        self.vy += self.gravity * dt
+        # ── 6. Regard vers le haut → afficher les cœurs ────────────────────
+        # Dans Hollow Knight, regarder vers le haut affiche l'état. On fait
+        # pareil : on reset le timer → les cœurs restent visibles tant qu'on
+        # regarde en l'air.
+        self.looking_up = (ay < 0)
+        if self.looking_up:
+            self.show_hp_timer = HP_DISPLAY_DURATION
 
-        # Saut
-        if keys[K_SPACE] and self.on_ground:
-            self.vy = -self.puissance_saut
-            self.on_ground = False
+        # ── 7. Saut (jump buffer + coyote + double-saut + wall-jump) ──────
+        # Si on vient d'appuyer sur saut : on "mémorise" l'appui pendant
+        # JUMP_BUFFER secondes. À chaque frame, on retente de sauter tant
+        # que le buffer est actif. C'est ce qui rend les sauts "généreux".
+        if jump_pressed:
+            self.jump_buffer = JUMP_BUFFER
 
-        if settings.manette and settings.manette.get_button(0) and self.on_ground:
-            self.vy = -self.puissance_saut
-            self.on_ground = False
+        if self.jump_buffer > 0:
+            if self._tenter_saut():
+                # Saut réussi → on consomme le buffer.
+                self.jump_buffer = 0.0
 
-        # Mouvement
+        # ── 8. Dash ───────────────────────────────────────────────────────
+        if dash_pressed and self.dash_cooldown <= 0 and not self.dashing:
+            self._declencher_dash(ax)
+
+        # ── 9. Gravité ────────────────────────────────────────────────────
+        if not self.dashing:
+            self.vy += self.gravity * dt
+            # Wall-slide → on plafonne la vitesse de chute.
+            if self.wall_sliding and self.vy > WALL_SLIDE_SPEED:
+                self.vy = WALL_SLIDE_SPEED
+        else:
+            # Pendant un dash, on flotte à la même hauteur (pas de gravité).
+            self.vy = 0
+
+        # ── 10. Détection du wall-slide ────────────────────────────────────
+        # On glisse seulement si :
+        #   - on est EN L'AIR
+        #   - on est COLLÉ à un mur (against_wall calculé dans post_physics)
+        #   - on APPUIE vers ce mur (sinon on décroche)
+        self.wall_sliding = (
+            not self.on_ground
+            and self.against_wall != 0
+            and ax == self.against_wall
+        )
+
+        # ── 11. Application du déplacement ────────────────────────────────
+        # int(...) sert à convertir la valeur en entier (rect ne gère que
+        # des entiers). Les pertes de précision sont négligeables à 80 FPS.
+        was_on_ground = self.on_ground
         self.rect.x += int(self.vx * dt)
         self.rect.y += int(self.vy * dt)
 
-        # Vérifier si le joueur est dans un trou (ignore sol/plafond)
-        in_hole = False
-        if holes:
-            for hole in holes:
-                if self.rect.colliderect(hole):
-                    in_hole = True
-                    break
+        # On mémorise la X qu'on "voulait" atteindre. Si les collisions vont
+        # nous pousser, on détectera la différence dans post_physics().
+        self._intended_x = self.rect.x
 
-        # Sol (seulement si pas dans un trou)
+        # ── 12. Sol et plafond (ignorés si on est au-dessus d'un trou) ────
+        in_hole = self._dans_un_trou(holes)
+
         if not in_hole and self.rect.bottom > settings.GROUND_Y:
             self.rect.bottom = settings.GROUND_Y
-            self.vy = 0
-            self.on_ground = True
+            self.vy          = 0
+            self.on_ground   = True
+        if not in_hole and self.rect.top < settings.CEILING_Y:
+            self.rect.top = settings.CEILING_Y
+            self.vy       = 0
 
-        # Plafond (seulement si pas dans un trou)
-        if not in_hole and hasattr(settings, 'CEILING_Y'):
-            if self.rect.top < settings.CEILING_Y:
-                self.rect.top = settings.CEILING_Y
-                self.vy = 0
+        # ── 13. Au contact du sol → reset des sauts ───────────────────────
+        if self.on_ground:
+            self.jumps_used   = 0
+            self.coyote_timer = COYOTE_TIME
+            self.against_wall = 0
+            self.wall_sliding = False
+        elif was_on_ground:
+            # Frame où on vient de quitter le sol (marche dans le vide,
+            # sauté, tombé). On lance le coyote timer : on peut encore
+            # sauter "comme si on était au sol" pendant COYOTE_TIME.
+            self.coyote_timer = COYOTE_TIME
 
-        # Attaque
-        if keys[K_f] and not self.attacking:
-            self.attacking = True
-            sound_manager.jouer("attaque")
-            self.attack_timer = ATTACK_DURATION
+        # ── 14. Attaque ───────────────────────────────────────────────────
+        self._gerer_attaque(dt, attack_pressed, ay)
 
-        if settings.manette and settings.manette.get_button(2) and not self.attacking:
-            self.attacking = True
-            sound_manager.jouer("attaque")
-            self.attack_timer = ATTACK_DURATION
+        # ── 15. Sons de pas ───────────────────────────────────────────────
+        self._gerer_son_pas(dt)
 
-        if self.attacking:
-            self.attack_timer -= dt
+        # ── 16. Timers de combat (invincibilité, durée de l'attaque) ──────
+        self._tick_combat_timers(dt)
 
-        if self.direction == 1:
-            self.attack_rect.topleft = (self.rect.right, self.rect.y + 20)
+        # ── 17. Régénération passive ──────────────────────────────────────
+        self._gerer_regen(dt, ax, ay, jump_held, attack_held, dash_held)
+
+    def post_physics(self):
+        """Appelé par game.py APRÈS la résolution des collisions.
+
+        Pourquoi ? Pendant mouvement(), on a calculé la position qu'on
+        VOULAIT (_intended_x). Ensuite, collision.py a peut-être poussé
+        le joueur pour l'empêcher de rentrer dans un mur. En comparant
+        la position VOULUE et la position RÉELLE, on déduit s'il y a un
+        mur à gauche ou à droite → utile pour activer le wall-slide.
+        """
+        # push_dx > 0 : la collision a poussé vers la droite → mur à gauche
+        # push_dx < 0 : la collision a poussé vers la gauche → mur à droite
+        # push_dx ≈ 0 : pas de mur
+        push_dx = self.rect.x - self._intended_x
+
+        if push_dx > 1:
+            self.against_wall = -1
+        elif push_dx < -1:
+            self.against_wall = 1
         else:
-            self.attack_rect.topright = (self.rect.left, self.rect.y + 20)
+            self.against_wall = 0
 
-        if self.attack_timer <= 0:
-            self.attacking = False
+    # ═════════════════════════════════════════════════════════════════════════
+    # 7.  SOUS-ROUTINES DE mouvement()
+    # ═════════════════════════════════════════════════════════════════════════
 
-        # Timers
+    def _tick_state_timers(self, dt):
+        """Décrémente les timers liés aux capacités (dash, coyote, buffer)."""
+        # Cooldown du dash.
+        if self.dash_cooldown > 0:
+            self.dash_cooldown -= dt
+
+        # Coyote timer : seulement quand on est en l'air (pas au sol).
+        if self.coyote_timer > 0 and not self.on_ground:
+            self.coyote_timer -= dt
+
+        # Jump buffer.
+        if self.jump_buffer > 0:
+            self.jump_buffer -= dt
+
+        # Lock après wall-jump.
+        if self.wall_lock_timer > 0:
+            self.wall_lock_timer -= dt
+
+        # Durée du dash en cours.
+        if self.dashing:
+            self.dash_timer -= dt
+            if self.dash_timer <= 0:
+                self.dashing = False
+
+    def _tick_combat_timers(self, dt):
+        """Décrémente les timers liés à l'invincibilité et l'attaque."""
         if self.invincible:
             self.invincible_timer -= dt
             if self.invincible_timer <= 0:
@@ -190,55 +631,237 @@ class Player:
         if self.show_hp_timer > 0:
             self.show_hp_timer -= dt
 
-        if self.on_ground and abs(self.vx) > 10:
+        if self.attacking:
+            self.attack_timer -= dt
+            if self.attack_timer <= 0:
+                self.attacking        = False
+                self._attack_buffered = False
+
+    def _tenter_saut(self):
+        """Tente un saut. Renvoie True si ça a réussi.
+
+        Ordre de priorité :
+            1. Saut au sol (ou coyote time actif)
+            2. Wall-jump (si collé à un mur en l'air)
+            3. Double-saut (si on a encore un saut dispo)
+        """
+        # 1. Saut depuis le sol (ou coyote).
+        if self.on_ground or self.coyote_timer > 0:
+            self.vy           = -self.puissance_saut
+            self.on_ground    = False
+            self.coyote_timer = 0
+            self.jumps_used   = 1
+            sound_manager.jouer("saut", volume=0.7)
+            return True
+
+        # 2. Wall-jump : contre un mur, en l'air.
+        if self.against_wall != 0 and not self.on_ground:
+            self.vy              = WALL_JUMP_VY
+            # On se propulse dans le sens OPPOSÉ au mur.
+            self.vx              = -self.against_wall * WALL_JUMP_VX
+            self.direction       = -self.against_wall
+            self.wall_lock_timer = WALL_JUMP_LOCK
+            self.jumps_used      = 1
+            self.wall_sliding    = False
+            return True
+
+        # 3. Double-saut.
+        if self.jumps_used < 2:
+            self.vy         = -DOUBLE_JUMP_POWER
+            self.jumps_used = 2
+            return True
+
+        # Aucun saut possible.
+        return False
+
+    def _declencher_dash(self, ax):
+        """Démarre un dash dans la direction demandée (ou la dernière connue)."""
+        # Si le joueur tient une direction, on dash dedans. Sinon on dash
+        # dans la direction qu'il regarde.
+        if ax != 0:
+            self.dash_dir = ax
+        else:
+            self.dash_dir = self.direction
+        self.direction     = self.dash_dir
+        self.dashing       = True
+        self.dash_timer    = DASH_DURATION
+        self.dash_cooldown = DASH_COOLDOWN
+
+    def _dans_un_trou(self, holes):
+        """Renvoie True si la hitbox chevauche l'un des trous passés."""
+        if not holes:
+            return False
+        # On parcourt chaque trou un par un. Dès qu'on trouve une intersection,
+        # on renvoie True tout de suite (pas besoin de tester les suivants).
+        for trou in holes:
+            if self.rect.colliderect(trou):
+                return True
+        return False
+
+    def _gerer_attaque(self, dt, attack_pressed, ay):
+        """Déclenche et place la hitbox d'attaque.
+
+        - attack_pressed = True → on lance une nouvelle attaque
+        - attack_dir = "down" si on appuie vers le bas ET qu'on est en l'air,
+                       "side" sinon (attaque devant)
+        """
+        # Déclenchement.
+        if attack_pressed and not self.attacking:
+            self.attacking        = True
+            self.attack_timer     = ATTACK_DURATION
+            self._attack_buffered = True
+            # Attaque vers le bas possible UNIQUEMENT en l'air (comme dans HK).
+            if ay > 0 and not self.on_ground:
+                self.attack_dir = "down"
+            else:
+                self.attack_dir = "side"
+            sound_manager.jouer("attaque")
+
+        # Repositionnement de la hitbox (doit suivre le joueur chaque frame).
+        if self.attack_dir == "down":
+            # Hitbox carrée collée au-dessous du joueur.
+            self.attack_rect.size   = (ATTACK_DOWN_W, ATTACK_DOWN_H)
+            self.attack_rect.midtop = (self.rect.centerx, self.rect.bottom)
+        else:
+            # Hitbox horizontale à gauche ou à droite selon direction.
+            self.attack_rect.size = (ATTACK_RECT_W, ATTACK_RECT_H)
+            if self.direction == 1:
+                self.attack_rect.topleft  = (self.rect.right, self.rect.y + 20)
+            else:
+                self.attack_rect.topright = (self.rect.left,  self.rect.y + 20)
+
+    def _gerer_son_pas(self, dt):
+        """Joue un son "pas" à intervalles réguliers quand on marche au sol."""
+        # On veut un son uniquement si on bouge vraiment (|vx| > 10) et qu'on
+        # est au sol. abs(...) donne la valeur absolue.
+        if self.on_ground and abs(self.vx) > 10 and not self.dashing:
             self.step_timer -= dt
             if self.step_timer <= 0:
-                sound_manager.jouer("pas", volume=0.3)
-                self.step_timer = 0.35
+                sound_manager.jouer("pas", volume=VOLUME_PAS)
+                self.step_timer = STEP_INTERVAL
         else:
+            # Arrête tout son de pas en cours (ex. passage en saut).
             self.step_timer = 0.2
             sound_manager.arreter("pas")
 
+    def _gerer_regen(self, dt, ax, ay, jump_held, attack_held, dash_held):
+        """Régénère 1 PV quand le joueur est parfaitement immobile au sol.
+
+        Règle : il faut rester inactif pendant REGEN_DELAY (1.5 s) pour le
+        premier PV, puis 1 PV de plus toutes les REGEN_INTERVAL (1 s).
+        La moindre action remet le compteur à zéro.
+        """
+        # On vérifie TOUTES les conditions : si une seule est fausse,
+        # le joueur n'est pas considéré comme immobile.
+        immobile_au_sol = (
+            self.on_ground
+            and ax == 0 and ay == 0
+            and not jump_held and not attack_held and not dash_held
+            and not self.attacking
+            and not self.invincible
+            and not self.dashing
+            and abs(self.vx) < 5
+            and self.knockback_vx == 0
+        )
+
+        # Pas immobile OU PV déjà plein → on reset et on sort.
+        if not immobile_au_sol or self.hp >= self.max_hp:
+            self._idle_timer  = 0.0
+            self.regen_active = False
+            return
+
+        # Immobile : on avance le compteur.
+        self._idle_timer += dt
+        self.regen_active = True
+
+        # Seuil atteint → on récupère 1 PV et on "consomme" REGEN_INTERVAL
+        # du timer (ainsi le 2e PV arrive pile 1 seconde après le 1er).
+        if self._idle_timer >= REGEN_DELAY:
+            self.hp            = min(self.max_hp, self.hp + 1)
+            self.show_hp_timer = HP_DISPLAY_DURATION
+            self._idle_timer  -= REGEN_INTERVAL
+            sound_manager.jouer("ui_select", volume=0.25)   # petit "tic" doux
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # 8.  RENDU (dessin du joueur à l'écran)
+    # ═════════════════════════════════════════════════════════════════════════
+    #
+    # Appelé par game.py dans _dessiner_monde(). On dessine :
+    #   - le sprite de marche (avec miroir si on regarde à gauche)
+    #   - la hitbox d'attaque en blanc (pendant une attaque)
+    #   - les cœurs au-dessus du joueur (récents dégâts ou regard en l'air)
+    #   - des rectangles de debug si show_hitbox=True
+
     def draw(self, surf, camera, show_hitbox=False):
-        if self.walking:
+        # 1. Avance l'animation si on bouge.
+        if self.walking or self.dashing:
             self.idle_anim.update()
 
+        # 2. Récupère la frame courante.
         img = self.idle_anim.img()
-
         if self.direction == -1:
+            # Miroir horizontal (le sprite regarde "à l'envers").
             img = pygame.transform.flip(img, True, False)
 
-        if self.invincible:
-            if int(self.invincible_timer * 12) % 2 == 0:
-                surf.blit(img, camera.apply(self.rect))
+        # 3. Calcule la position du sprite dans le monde.
+        # Le sprite peut être plus grand que la hitbox. ox / oy servent à
+        # caler la hitbox À L'INTÉRIEUR du sprite. Quand on regarde à
+        # gauche, l'offset horizontal est inversé (miroir).
+        if self.direction >= 0:
+            sx = self.rect.x - self.hitbox_ox
         else:
-            surf.blit(img, camera.apply(self.rect))
+            sx = self.rect.x - (self.sprite_w - self.hitbox_ox - self.hitbox_w)
+        sy = self.rect.y - self.hitbox_oy
+        sprite_rect = pygame.Rect(sx, sy, self.sprite_w, self.sprite_h)
 
+        # 4. Dessin du sprite (avec clignotement pendant l'invincibilité).
+        if self.invincible:
+            # On clignote à 6 Hz environ (un frame sur deux pendant 0.16 s).
+            # int(t * 12) alterne pair/impair → affiche ou pas.
+            if int(self.invincible_timer * 12) % 2 == 0:
+                surf.blit(img, camera.apply(sprite_rect))
+        else:
+            surf.blit(img, camera.apply(sprite_rect))
+
+        # 5. Hitbox d'attaque (rectangle blanc devant/sous le joueur).
         if self.attacking:
             pygame.draw.rect(surf, BLANC, camera.apply(self.attack_rect))
 
-        # Cœurs au-dessus du joueur
+        # 6. Cœurs (dégâts récents OU regard vers le haut).
         if self.show_hp_timer > 0:
             self._draw_hearts(surf, camera)
 
+        # 7. Hitbox de debug (optionnel : touche H dans l'éditeur).
         if show_hitbox:
-            pygame.draw.rect(surf, (0, 255, 0), camera.apply(self.rect), 1)
+            pygame.draw.rect(surf, (0, 255, 0),  camera.apply(self.rect),        1)
+            pygame.draw.rect(surf, (80, 80, 200), camera.apply(sprite_rect),     1)
 
     def _draw_hearts(self, surf, camera):
+        """Dessine une rangée de petits carrés rouges/gris au-dessus du joueur.
+
+        Rouges   = PV restants
+        Gris     = PV perdus
+        """
+        # Création paresseuse de la police (seulement à la 1re utilisation).
         if self._heart_font is None:
             self._heart_font = pygame.font.SysFont("Consolas", 18)
-        sr = camera.apply(self.rect)
-        # Dessine des carrés colorés comme cœurs
-        heart_size = 12
-        gap = 4
-        total_w = self.max_hp * (heart_size + gap) - gap
-        start_x = sr.centerx - total_w // 2
-        y = sr.top - 20
+
+        # Calcul de la position de la rangée de cœurs.
+        sr         = camera.apply(self.rect)
+        heart_size = 12                                   # côté d'un cœur (px)
+        gap        = 4                                    # espace entre cœurs
+        total_w    = self.max_hp * (heart_size + gap) - gap
+        start_x    = sr.centerx - total_w // 2            # centré au-dessus du joueur
+        y          = sr.top - 20                          # 20 px plus haut
+
+        # Dessine max_hp cœurs, un par un.
         for i in range(self.max_hp):
             x = start_x + i * (heart_size + gap)
+            # Rouge si PV restant, gris foncé sinon.
             if i < self.hp:
-                color = (255, 50, 80)  # rouge = plein
+                couleur = (255, 50, 80)
             else:
-                color = (80, 80, 80)   # gris = vide
-            pygame.draw.rect(surf, color, (x, y, heart_size, heart_size))
+                couleur = (80, 80, 80)
+            # Rectangle plein (le "cœur") puis contour clair autour.
+            pygame.draw.rect(surf, couleur,        (x, y, heart_size, heart_size))
             pygame.draw.rect(surf, (200, 200, 200), (x, y, heart_size, heart_size), 1)
